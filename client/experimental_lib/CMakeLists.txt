@@ -322,6 +322,7 @@ set (TARGET_SOURCES
         ${PM3_ROOT}/client/src/uart/uart_common.c
         ${PM3_ROOT}/client/src/uart/uart_posix.c
         ${PM3_ROOT}/client/src/uart/ble_posix.c
+        ${PM3_ROOT}/client/src/uart/usbfd_posix.c
         ${PM3_ROOT}/client/src/uart/uart_win32.c
         ${PM3_ROOT}/client/src/ui/overlays.ui
         ${PM3_ROOT}/client/src/ui/image.ui

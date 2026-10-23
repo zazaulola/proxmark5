@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+
+# Run the Proxmark client in Termux over a USB OTG cable, without root.
+#
+# Android gives apps no /dev/ttyACM*, but Termux:API's termux-usb can hand a
+# program a file descriptor for a USB device once the user allows it. This
+# script asks for that permission, then starts the client on "usbfd:<fd>".
+#
+# Needs: the Termux:API app (F-Droid) and `pkg install termux-api libusb`, and a
+# client built with libusb (the build prints "libusb (usbfd:): ... enabled").
+#
+# Usage: pm3-termux-usb [--device /dev/bus/usb/BBB/DDD] [client options...]
+#   e.g. pm3-termux-usb
+#        pm3-termux-usb -c "hw bwm wifi --ssid MyHotspot --pwd secret"
+
+# Second stage: termux-usb runs us again with the device fd as last argument.
+if [ -n "$PM3_TERMUX_USB_STAGE2" ]; then
+    fd="${TERMUX_USB_FD:-${!#}}"
+    eval "set -- $PM3_TERMUX_USB_ARGS"
+    exec "$PM3_TERMUX_USB_CLIENT" -p "usbfd:$fd" "$@"
+fi
+
+PM3PATH=$(cd "$(dirname "$0")" && pwd)
+SELF="$PM3PATH/$(basename "$0")"
+
+if [ -x "$PM3PATH/client/proxmark3" ]; then
+    CLIENT="$PM3PATH/client/proxmark3"
+elif [ -x "$PM3PATH/client/build/proxmark3" ]; then
+    CLIENT="$PM3PATH/client/build/proxmark3"
+elif [ -x "$PM3PATH/proxmark3" ]; then
+    CLIENT="$PM3PATH/proxmark3"
+else
+    CLIENT=$(command -v proxmark3)
+fi
+if [ -z "$CLIENT" ]; then
+    echo >&2 "[!!] proxmark3 client not found, did you compile it?"
+    exit 1
+fi
+
+if ! command -v termux-usb >/dev/null 2>&1; then
+    echo >&2 "[!!] termux-usb not found: install the Termux:API app and run: pkg install termux-api"
+    exit 1
+fi
+
+DEVICE="$PM3_USB_DEVICE"
+if [ "$1" == "--device" ]; then
+    DEVICE="$2"
+    shift 2
+fi
+
+if [ -z "$DEVICE" ]; then
+    # termux-usb -l prints a JSON array of device paths
+    mapfile -t DEVICES < <(termux-usb -l | tr -d '[]", ' | grep '^/dev/')
+    if [ ${#DEVICES[@]} -eq 0 ]; then
+        echo >&2 "[!!] no USB device found. Is the Proxmark plugged in through an OTG adapter?"
+        exit 1
+    fi
+    if [ ${#DEVICES[@]} -gt 1 ]; then
+        echo >&2 "[!!] several USB devices found, pick one with --device:"
+        printf >&2 '       %s\n' "${DEVICES[@]}"
+        exit 1
+    fi
+    DEVICE="${DEVICES[0]}"
+fi
+
+echo "[=] Using USB device $DEVICE (accept the Android permission prompt if one shows up)"
+
+ARGS=""
+for a in "$@"; do
+    ARGS+="$(printf '%q' "$a") "
+done
+
+unset TERMUX_USB_FD
+export PM3_TERMUX_USB_STAGE2=1
+export PM3_TERMUX_USB_ARGS="$ARGS"
+export PM3_TERMUX_USB_CLIENT="$CLIENT"
+exec termux-usb -r -e "$SELF" "$DEVICE"

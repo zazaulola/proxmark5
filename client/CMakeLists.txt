@@ -131,6 +131,10 @@ if (NOT SKIPBT EQUAL 1)
     pkg_search_module(BLUEZ QUIET bluez)
 endif (NOT SKIPBT EQUAL 1)
 
+if ((NOT SKIPLIBUSB EQUAL 1) AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID))
+    pkg_search_module(LIBUSB QUIET libusb-1.0)
+endif ((NOT SKIPLIBUSB EQUAL 1) AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID))
+
 if (NOT SKIPPYTHON EQUAL 1)
     pkg_search_module(PYTHON3 QUIET ${PYTHON3_PKGCONFIG})
     pkg_search_module(PYTHON3EMBED QUIET ${PYTHON3_PKGCONFIG}-embed)
@@ -395,6 +399,7 @@ set (TARGET_SOURCES
         ${PM3_ROOT}/client/src/uart/uart_common.c
         ${PM3_ROOT}/client/src/uart/uart_posix.c
         ${PM3_ROOT}/client/src/uart/ble_posix.c
+        ${PM3_ROOT}/client/src/uart/usbfd_posix.c
         ${PM3_ROOT}/client/src/uart/uart_win32.c
         ${PM3_ROOT}/client/src/ui/overlays.ui
         ${PM3_ROOT}/client/src/ui/image.ui
@@ -626,6 +631,12 @@ if (NOT SKIPBT EQUAL 1)
     endif (BLUEZ_FOUND)
 endif(NOT SKIPBT EQUAL 1)
 
+if (LIBUSB_FOUND)
+    add_definitions("-DHAVE_LIBUSB")
+    set(ADDITIONAL_DIRS ${LIBUSB_INCLUDE_DIRS} ${ADDITIONAL_DIRS})
+    set(ADDITIONAL_LNK ${LIBUSB_LDFLAGS} ${ADDITIONAL_LNK})
+endif (LIBUSB_FOUND)
+
 if (JANSSON_FOUND)
     set(ADDITIONAL_DIRS ${JANSSON_INCLUDE_DIRS} ${ADDITIONAL_DIRS})
     set(ADDITIONAL_LNK ${JANSSON_LIBRARIES} ${ADDITIONAL_LNK})
@@ -715,6 +726,12 @@ else (SKIPBT EQUAL 1)
         message(STATUS "native BT support: Bluez not found, disabled")
     endif (BLUEZ_FOUND)
 endif(SKIPBT EQUAL 1)
+
+if (LIBUSB_FOUND)
+    message(STATUS "libusb (usbfd:):   libusb-1.0 found, enabled")
+else (LIBUSB_FOUND)
+    message(STATUS "libusb (usbfd:):   not found or skipped, disabled")
+endif (LIBUSB_FOUND)
 
 if (BZIP2_FOUND)
     if (EMBED_BZIP2)

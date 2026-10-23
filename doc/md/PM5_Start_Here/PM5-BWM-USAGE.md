@@ -305,6 +305,11 @@ Bluetooth, so one setup covers a Blueshark-equipped Proxmark3 too.
 > WiFi instead ([3](#3-wifi-sta--tcp-server)): the client then connects straight to
 > the BWM's TCP server, with no app in between.
 
+> [!TIP]
+> WiFi needs a one-time setup over an existing link. On a phone that link can be a USB
+> OTG cable, with no root and no bridge app: see
+> [termux_notes.md, Proxmark5: wireless without a PC](../../termux_notes.md#proxmark5-wireless-without-a-pc).
+
 ---
 
 ## 3. WiFi (STA + TCP server)

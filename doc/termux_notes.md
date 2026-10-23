@@ -10,6 +10,8 @@
     - [Setting up Termux](#setting-up-termux)
     - [Install Proxmark3 package which follows tagged releases](#install-proxmark3-package-which-follows-tagged-releases)
     - [Optional: Building Proxmark3 client from source](#optional-building-proxmark3-client-from-source)
+  - [USB OTG without root: termux-usb](#usb-otg-without-root-termux-usb)
+  - [Proxmark5: wireless without a PC](#proxmark5-wireless-without-a-pc)
   - [PC-like method](#pc-like-method)
     - [Specific requirements](#specific-requirements)
     - [USB\_ACM](#usb_acm)
@@ -77,6 +79,75 @@ Testing:
 ```
 make host/check
 ```
+
+To also get the [`usbfd:` USB OTG port](#usb-otg-without-root-termux-usb), add `libusb` and `termux-api`
+before building (and install the [Termux:API](https://f-droid.org/en/packages/com.termux.api/) app):
+```
+pkg install liblz4 libusb termux-api
+make clean && make client
+```
+The build summary should then print `libusb (usbfd:):   libusb-1.0 found, enabled`.
+
+## USB OTG without root: termux-usb
+^[Top](#top)
+
+Android gives apps no `/dev/ttyACM*`, but the Termux:API app can hand a Termux program a file
+descriptor for a USB device once you allow it in the usual Android permission prompt. A client
+built with libusb (see [above](#optional-building-proxmark3-client-from-source)) talks USB-CDC
+over that descriptor directly: no root, no kernel driver, no bridge app.
+
+```
+|Client in Termux| <--libusb on the fd from termux-usb--> |Proxmark3 / Proxmark5|
+```
+
+Plug the Proxmark in through an OTG adapter, then from the repository directory:
+```
+./pm3-termux-usb
+```
+The script finds the USB device, asks for permission and starts the client on `usbfd:<fd>`. Client
+options pass through, e.g. `./pm3-termux-usb -c "hw version"`. With more than one USB device
+attached, pick one: `./pm3-termux-usb --device /dev/bus/usb/001/002` (list them with `termux-usb -l`).
+
+The same thing by hand:
+```
+termux-usb -l                                   # e.g. ["/dev/bus/usb/001/002"]
+termux-usb -r -e ./myscript /dev/bus/usb/001/002
+# termux-usb runs ./myscript with the fd as its argument; inside it:
+./client/proxmark3 -p usbfd:$1
+```
+`-p usbfd:` with no number takes the fd from `$TERMUX_USB_FD`.
+
+> [!NOTE]
+> The descriptor belongs to one USB attachment. If the Proxmark reboots (for example into the
+> bootloader) or is unplugged, start the script again.
+
+## Proxmark5: wireless without a PC
+^[Top](#top)
+
+A Proxmark5 with the Battery/Wireless Module (BWM) and firmware built with `PLATFORM_EXTRAS=BWM`
+can join a WiFi network and serve the client over TCP, see
+[PM5-BWM-USAGE.md](md/PM5_Start_Here/PM5-BWM-USAGE.md#3-wifi-sta--tcp-server). WiFi has to be
+set up once over an existing link; with the [USB OTG method](#usb-otg-without-root-termux-usb)
+that link can be the phone itself:
+
+1. Turn on the phone's WiFi hotspot (or use any WiFi network the phone is on).
+2. Plug the PM5 into the phone with an OTG adapter and set up WiFi, keeping the PM5 on when the
+   cable is pulled:
+   ```
+   ./pm3-termux-usb
+   [usb] pm3 --> hw bwm autooff --unplug off
+   [usb] pm3 --> hw bwm wifi --ssid <hotspot name> --pwd <password>
+   [+] BWM on WiFi at 192.168.43.77
+   [usb] pm3 --> quit
+   ```
+3. Unplug the cable and connect over WiFi:
+   ```
+   ./client/proxmark3 -p tcp:192.168.43.77
+   ```
+
+The WiFi setting is stored on the BWM, so after a power cycle it rejoins on its own and only step 3
+is needed. If the address changes, `hw bwm wifi status` over any link shows the current one.
+To go back to BLE only: `hw bwm wifi stop`.
 
 ## PC-like method
 ^[Top](#top)

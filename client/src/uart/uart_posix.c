@@ -45,6 +45,10 @@
 #include "ble_posix.h"
 #endif
 
+#ifdef HAVE_LIBUSB
+#include "usbfd_posix.h"
+#endif
+
 #include "comms.h"
 #include "ui.h"
 #include "util_posix.h" // msleep
@@ -64,6 +68,7 @@ typedef struct {
     term_info tiNew;  // Terminal info during the transaction
     RingBuffer *udpBuffer;
     void *ble;        // ble_conn_t* when connected via ble: (HAVE_BLUEZ), else NULL
+    void *usb;        // usbfd_conn_t* when connected via usbfd: (HAVE_LIBUSB), else NULL
 } serial_port_unix_t_t;
 
 // see pm3_cmd.h
@@ -160,6 +165,7 @@ serial_port uart_open(const char *pcPortName, uint32_t speed, bool slient) {
     bool isBluetooth = false;
     bool isBLE = false;
     bool isUnixSocket = false;
+    bool isUsbFd = (strncmp(prefix, "usbfd:", 6) == 0);
     if (strlen(prefix) > 4) {
         isTCP = (memcmp(prefix, "tcp:", 4) == 0);
         isUDP = (memcmp(prefix, "udp:", 4) == 0);
@@ -463,6 +469,35 @@ serial_port uart_open(const char *pcPortName, uint32_t speed, bool slient) {
         return INVALID_SERIAL_PORT;
 #endif // HAVE_BLUEZ
     }
+    if (isUsbFd) {
+        free(prefix);
+#ifdef HAVE_LIBUSB
+        int sys_fd = usbfd_parse(pcPortName + 6);
+        if (sys_fd < 0) {
+            if (slient == false) {
+                PrintAndLogEx(ERR, "error: usbfd: needs a file descriptor, " _YELLOW_("usbfd:<fd>") " or $" USBFD_ENV_VAR);
+            }
+            free(sp);
+            return INVALID_SERIAL_PORT;
+        }
+        int app_fd = -1;
+        usbfd_conn_t *uc = usbfd_open(sys_fd, &app_fd, slient);
+        if (uc == NULL) {
+            free(sp);
+            return INVALID_SERIAL_PORT;
+        }
+        sp->usb = uc;
+        sp->fd = app_fd;   // socketpair end, plain read/write/select below
+        g_conn.uart_speed = speed;
+        g_conn.send_via_ip = PM3_NONE;
+        return sp;
+#else
+        PrintAndLogEx(ERR, "Sorry, this client was built without libusb (usbfd:) support");
+        free(sp);
+        return INVALID_SERIAL_PORT;
+#endif // HAVE_LIBUSB
+    }
+
     // The socket for abstract namespace implement.
     // Is local socket buffer, not a TCP or any net connection!
     // so, you can't connect with address like: 127.0.0.1, or any IP
@@ -606,6 +641,14 @@ void uart_close(const serial_port sp) {
         ble_close((ble_conn_t *)spu->ble);
         free(spu->ble);
         spu->ble = NULL;
+        free(sp);
+        return;
+    }
+#endif
+#ifdef HAVE_LIBUSB
+    if (spu->usb) {
+        usbfd_close((usbfd_conn_t *)spu->usb);   // also closes spu->fd
+        spu->usb = NULL;
         free(sp);
         return;
     }
@@ -840,6 +883,13 @@ bool uart_set_speed(serial_port sp, const uint32_t uiPortSpeed) {
         return true;
     }
 #endif
+#ifdef HAVE_LIBUSB
+    if (spu->usb) {
+        // USB-CDC has no real baud rate either
+        g_conn.uart_speed = uiPortSpeed;
+        return true;
+    }
+#endif
     speed_t stPortSpeed;
     switch (uiPortSpeed) {
         case 0:
@@ -952,6 +1002,11 @@ uint32_t uart_get_speed(const serial_port sp) {
         // BLE has no termios baud; report the BWM link rate so the client's
         // timeout math (12000000 / uart_speed) never divides by zero.
         return 460800;
+    }
+#endif
+#ifdef HAVE_LIBUSB
+    if (spu->usb) {
+        return g_conn.uart_speed ? g_conn.uart_speed : 115200;
     }
 #endif
 

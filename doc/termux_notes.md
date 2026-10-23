@@ -100,14 +100,10 @@ The script finds the USB device, asks for permission and starts the client on `u
 options pass through, e.g. `./pm3-termux-usb -c "hw version"`. With more than one USB device
 attached, pick one: `./pm3-termux-usb --device /dev/bus/usb/001/002` (list them with `termux-usb -l`).
 
-The same thing by hand:
-```
-termux-usb -l                                   # e.g. ["/dev/bus/usb/001/002"]
-termux-usb -r -e ./myscript /dev/bus/usb/001/002
-# termux-usb runs ./myscript with the fd as its argument; inside it:
-./client/proxmark3 -p usbfd:$1
-```
-`-p usbfd:` with no number takes the fd from `$TERMUX_USB_FD`.
+Use the script rather than calling `termux-usb -e` yourself for interactive sessions: termux-usb
+captures the started program's output and drops its exit code, which the script works around.
+For scripts of your own, the port is `-p usb:<fd>` (alias `usbfd:<fd>`), or `-p usb:` to take the
+fd from `$TERMUX_USB_FD`.
 
 > [!NOTE]
 > The descriptor belongs to one USB attachment. If the Proxmark is unplugged, start the script

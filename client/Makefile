@@ -318,19 +318,6 @@ endif
 LDLIBS += $(BTLIBLD)
 PM3INCLUDES += $(BTLIBINC)
 
-## libusb (optional, Linux/Android only): usbfd: ports, e.g. Termux + termux-usb
-ifneq ($(SKIPLIBUSB),1)
-    ifeq ($(platform),Linux)
-        LIBUSBINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags libusb-1.0 2>/dev/null)
-        LIBUSBLDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs libusb-1.0 2>/dev/null)
-        ifneq ($(LIBUSBLDLIBS),)
-            LDLIBS += $(LIBUSBLDLIBS)
-            PM3INCLUDES += $(LIBUSBINCLUDES)
-            LIBUSB_FOUND = 1
-        endif
-    endif
-endif
-
 ## Math
 LDLIBS += -lm
 
@@ -523,10 +510,6 @@ ifeq ($(BT_FOUND),1)
     PM3CFLAGS += -DHAVE_BLUEZ
 endif
 
-ifeq ($(LIBUSB_FOUND),1)
-    PM3CFLAGS += -DHAVE_LIBUSB
-endif
-
 ifeq ($(PYTHON_FOUND),1)
     PM3CFLAGS += -DHAVE_PYTHON
 endif
@@ -619,16 +602,6 @@ else
         ifeq ($(FORCEBT),1)
             $(error FORCEBT not satisfied, aborting)
         endif
-    endif
-endif
-
-ifeq ($(SKIPLIBUSB),1)
-    $(info libusb (usbfd:):   skipped)
-else
-    ifeq ($(LIBUSB_FOUND),1)
-        $(info libusb (usbfd:):   libusb-1.0 found, enabled)
-    else
-        $(info libusb (usbfd:):   libusb-1.0 not found, disabled)
     endif
 endif
 
@@ -958,7 +931,6 @@ SRCS =  mifare/aiddesfire.c \
         uart/uart_common.c \
         uart/uart_posix.c \
         uart/ble_posix.c \
-        uart/usbfd_posix.c \
         uart/uart_win32.c \
         scripting.c \
         ui.c \

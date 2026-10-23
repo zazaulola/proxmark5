@@ -80,24 +80,16 @@ Testing:
 make host/check
 ```
 
-To also get the [`usbfd:` USB OTG port](#usb-otg-without-root-termux-usb), add `libusb` and `termux-api`
-before building (and install the [Termux:API](https://f-droid.org/en/packages/com.termux.api/) app):
-```
-pkg install liblz4 libusb termux-api
-make clean && make client
-```
-The build summary should then print `libusb (usbfd:):   libusb-1.0 found, enabled`.
-
 ## USB OTG without root: termux-usb
 ^[Top](#top)
 
 Android gives apps no `/dev/ttyACM*`, but the Termux:API app can hand a Termux program a file
-descriptor for a USB device once you allow it in the usual Android permission prompt. A client
-built with libusb (see [above](#optional-building-proxmark3-client-from-source)) talks USB-CDC
-over that descriptor directly: no root, no kernel driver, no bridge app.
+descriptor for a USB device once you allow it in the usual Android permission prompt. The client talks
+USB-CDC over that descriptor directly: no root, no kernel driver, no bridge app, and no extra packages
+in the client build. Only the Termux:API app and `pkg install termux-api` are needed.
 
 ```
-|Client in Termux| <--libusb on the fd from termux-usb--> |Proxmark3 / Proxmark5|
+|Client in Termux| <--USB, fd from termux-usb--> |Proxmark3 / Proxmark5|
 ```
 
 Plug the Proxmark in through an OTG adapter, then from the repository directory:
@@ -118,8 +110,9 @@ termux-usb -r -e ./myscript /dev/bus/usb/001/002
 `-p usbfd:` with no number takes the fd from `$TERMUX_USB_FD`.
 
 > [!NOTE]
-> The descriptor belongs to one USB attachment. If the Proxmark reboots (for example into the
-> bootloader) or is unplugged, start the script again.
+> The descriptor belongs to one USB attachment. If the Proxmark is unplugged, start the script
+> again. When flashing, the script itself waits for the device to come back in bootloader mode
+> and asks for permission again.
 
 ## Proxmark5: wireless without a PC
 ^[Top](#top)

@@ -3,7 +3,6 @@ All notable changes to this project will be documented in this file.
 This project uses the changelog in accordance with [keepchangelog](http://keepachangelog.com/). Please use this to write notable changes, which is not the same as git commit log...
 
 ## [unreleased][unreleased]
-- Added `usbfd:` client port and `pm3-termux-usb` script - USB OTG on Android/Termux without root through termux-usb, e.g. to set up PM5 BWM WiFi from a phone
 - Changed `hf seos info` - now prints UID, ATQA, SAK, ATS, MIFARE Classic emulation, which SEOS AIDs answer and the known AIDs found (@antoniovazquezblanco)
 - Fixed `hf seos managekeys -p` - key table columns stay aligned for slots 10 and up (@antoniovazquezblanco)
 - Fixed `aidlist.json` - uppercased the SEOS, TeslaDAP and LA Tap AIDs (@antoniovazquezblanco)

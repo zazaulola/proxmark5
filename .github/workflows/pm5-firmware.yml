@@ -1,0 +1,63 @@
+name: Proxmark5 firmware
+
+# Ready to flash Proxmark5 images, so a phone can update the device without
+# building anything: download the artifact, then pm3-termux-usb (see
+# doc/termux_notes.md, "Flashing a Proxmark5 from the phone").
+
+on:
+  push:
+    paths-ignore:
+      - 'doc/**'
+      - 'docker/**'
+      - 'traces/**'
+      - '.vscode/**'
+      - '**.md'
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - 'docker/**'
+      - 'traces/**'
+      - '.vscode/**'
+      - '**.md'
+  workflow_dispatch:
+
+jobs:
+  pm5-firmware:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pm5
+            extras: ''
+          - name: pm5-bwm
+            extras: BWM
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Update apt repos
+        run: sudo apt-get update
+
+      - name: Install dependencies
+        run: sudo apt-get install -yqq make build-essential gcc-arm-none-eabi libnewlib-dev
+
+      - name: Build
+        env:
+          PLATFORM: PM5
+          PLATFORM_EXTRAS: ${{ matrix.extras }}
+        run: make -j$((`nproc` + 1)) bootrom fullimage recovery
+
+      - name: Collect images
+        run: |
+          mkdir -p out
+          cp bootrom/obj/bootrom.elf armsrc/obj/fullimage.elf recovery/recovery.bin out/
+          git log -1 --format='%H %cd' > out/VERSION.txt
+          (cd out && sha256sum * > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proxmark5-firmware-${{ matrix.name }}
+          path: out/
+          retention-days: 30

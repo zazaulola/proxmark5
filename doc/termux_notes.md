@@ -32,6 +32,13 @@
   - [Compiling and Flashing a Proxmark3 Firmware from non-root Android](#compiling-and-flashing-a-proxmark3-firmware-from-non-root-android)
     - [Compiling the Proxmark3 Firmware](#compiling-the-proxmark3-firmware)
     - [Flashing the Proxmark3 Firmware](#flashing-the-proxmark3-firmware)
+  - [Flashing a Proxmark5 from the phone, no PC and no root](#flashing-a-proxmark5-from-the-phone-no-pc-and-no-root)
+    - [What you need](#what-you-need)
+    - [Get the firmware](#get-the-firmware)
+    - [First flash of a new Proxmark5](#first-flash-of-a-new-proxmark5)
+    - [Later updates](#later-updates)
+    - [Recovery over DFU](#recovery-over-dfu)
+    - [Troubleshooting the USB link](#troubleshooting-the-usb-link)
 ## Requirements
 ^[Top](#top)
 
@@ -324,3 +331,112 @@ The freshly flashed device is now ready to be used.
 ```
 ./client/proxmark3 tcp:localhost:<chosenPort>
 ```
+
+## Flashing a Proxmark5 from the phone, no PC and no root
+^[Top](#top)
+
+The client can talk to the Proxmark over USB itself, using the file descriptor that Termux:API's
+`termux-usb` hands out once you allow access in the Android prompt. No root, no kernel driver, no
+bridge app, and no library beyond what the client already needs. `pm3-termux-usb` wraps it; the
+`pm3`, `pm3-flash*` scripts use it on their own when they run in Termux.
+
+Unlike the TCP bridge apps, this survives the reboot into the bootloader: the device then shows up
+as a new USB device, the client exits with code 3, and `pm3-termux-usb` waits for it, asks for
+permission again (tap OK a second time) and carries on.
+
+### What you need
+^[Top](#top)
+
+- Termux **and** Termux:API, both from F-Droid (the Play Store builds don't match each other).
+- An OTG adapter or a USB-C to USB-C cable. Use the Proxmark5 USB port on the **button side**.
+- The client from this repository (the `proxmark3` Termux package doesn't have the `usb:` port yet):
+  ```
+  pkg install termux-api git make clang readline libc++ binutils libgd
+  git clone https://github.com/zazaulola/proxmark5.git
+  cd proxmark5
+  make -j client
+  ```
+
+### Get the firmware
+^[Top](#top)
+
+Every push builds the Proxmark5 images in GitHub Actions (workflow "Proxmark5 firmware"). Open the
+latest run of the branch you want in the phone's browser, download `proxmark5-firmware-pm5-bwm`
+(with the Battery/Wireless Module) or `proxmark5-firmware-pm5` (without), and unpack it in Termux:
+```
+termux-setup-storage                 # once, gives Termux access to Download/
+mkdir -p ~/pm5fw && cd ~/pm5fw
+unzip ~/storage/downloads/proxmark5-firmware-pm5-bwm.zip
+cat VERSION.txt && sha256sum -c SHA256SUMS
+cd ~/proxmark5
+```
+It contains `bootrom.elf`, `fullimage.elf` and `recovery.bin`. Building them in Termux is possible
+too, see [Compiling the Proxmark3 Firmware](#compiling-the-proxmark3-firmware), with `PLATFORM=PM5`.
+
+### First flash of a new Proxmark5
+^[Top](#top)
+
+Same steps as [Getting Started with the Proxmark5](md/PM5_Start_Here/Getting_Started_With_PM5.md),
+with the phone instead of a PC. If a BWM is fitted, remove it for this first flash.
+
+1. Put the Proxmark5 into *Boot Mode*: plug it into the phone while holding the button for about
+   4 seconds, until LEDs B and D are on. (If they go on and then off, that is DFU mode: unplug and
+   try again.)
+2. Flash the bootloader:
+   ```
+   ./pm3-termux-usb --flash --unlock-bootloader --image ~/pm5fw/bootrom.elf
+   ```
+3. Unplug, enter *Boot Mode* again, flash the main firmware:
+   ```
+   ./pm3-termux-usb --flash --image ~/pm5fw/fullimage.elf
+   ```
+4. Unplug, plug in normally, check it:
+   ```
+   ./pm3-termux-usb -c "hw version"
+   ```
+
+### Later updates
+^[Top](#top)
+
+Once the new bootloader is in, no button is needed: the client sends the device to its bootloader
+and `pm3-termux-usb` follows it.
+```
+./pm3-termux-usb --flash --image ~/pm5fw/fullimage.elf
+./pm3-flash ~/pm5fw/fullimage.elf   # same, through the pm3 helper scripts
+./pm3                            # the client, port detected automatically
+```
+A Proxmark5 with a BWM-capable bootloader can also be flashed over WiFi or BLE, see
+[PM5-BWM-USAGE.md](md/PM5_Start_Here/PM5-BWM-USAGE.md).
+
+### Recovery over DFU
+^[Top](#top)
+
+If the Proxmark5 doesn't enter Boot Mode or the flasher gets no answer, rewrite everything through
+the MCU's own DFU loader. This replaces `dfu-util`, which can't open USB devices on a non-root
+phone.
+
+1. Press and hold the button while plugging the Proxmark5 in, until the LEDs go off. Keep holding.
+2. Write the recovery image (bootloader and firmware in one file):
+   ```
+   ./pm3-termux-usb --dfu ~/pm5fw/recovery.bin
+   ```
+   Only the flash pages the image covers are erased. The image is read back and compared before
+   the loader starts it.
+3. Release the button, unplug and plug back in. Then continue with the
+   [first flash](#first-flash-of-a-new-proxmark5) to get the latest bootloader and firmware.
+
+`--dfu` takes a raw `.bin`; `--dfuaddr` changes the address (default `0x08000000`).
+
+### Troubleshooting the USB link
+^[Top](#top)
+
+- No device found: check the cable and OTG adapter; `termux-usb -l` must list a `/dev/bus/usb/...`
+  path. Some phones only supply power through OTG when "OTG" is turned on in the settings.
+- Several USB devices (a hub): choose one with `./pm3-termux-usb --device /dev/bus/usb/001/002`.
+- The permission prompt shows up after each reboot of the Proxmark: that is Android's rule for a
+  newly attached device. Tap OK.
+- By hand, without the script: `termux-usb -r -e ./myscript /dev/bus/usb/001/002`. termux-usb runs
+  `./myscript` with the descriptor as its argument; there run `./client/proxmark3 -p usb:$1`, or
+  `-p usb:` to take it from `$TERMUX_USB_FD`. `usbfd:` is the same as `usb:`.
+- On a Linux PC or a rooted phone the same code works with a device node:
+  `./client/proxmark3 -p usb:/dev/bus/usb/001/002` (no `cdc_acm` needed).

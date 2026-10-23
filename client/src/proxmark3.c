@@ -35,6 +35,7 @@
 #include "comms.h"
 #include "fileutils.h"
 #include "flash.h"
+#include "dfuse.h"
 #include "preferences.h"
 #include "commonutil.h"
 #include "cmdscript.h"
@@ -856,6 +857,9 @@ static void show_help(bool showFullHelp, char *exec_name) {
         PrintAndLogEx(NORMAL, "      --unlock-bootloader                 Enable flashing of bootloader area *DANGEROUS* (need --flash)");
         PrintAndLogEx(NORMAL, "      --force                             Enable flashing even if firmware seems to not match client version");
         PrintAndLogEx(NORMAL, "      --image <imagefile>                 image to flash. Can be specified several times.");
+        PrintAndLogEx(NORMAL, "\nOptions in DFU mode (Proxmark5 MCU loader, usb: ports only):");
+        PrintAndLogEx(NORMAL, "      --dfu <file.bin>                    write a raw image, e.g. recovery/recovery.bin, like dfu-util -s <addr>:leave");
+        PrintAndLogEx(NORMAL, "      --dfuaddr <address>                 where to write it, default 0x%08x", DFUSE_DEFAULT_ADDRESS);
         PrintAndLogEx(NORMAL, "\nOptions in memory dump mode:");
         PrintAndLogEx(NORMAL, "      --dumpmem <dumpfile>                dumps Proxmark3 flash memory to file");
         PrintAndLogEx(NORMAL, "      --dumpaddr <address>                starting address for dump, default 0");
@@ -1039,6 +1043,10 @@ int flash_pm3(char *serial_port_name, uint8_t num_files, const char *filenames[]
     }
 
     ret = flash_start_flashing(can_write_bl, serial_port_name, &flash_dev, files, num_files);
+    if (ret == FLASH_REOPEN_PORT) {
+        // port already closed, the device is rebooting into its bootloader
+        goto finish2;
+    }
     if (ret != PM3_SUCCESS) {
         goto finish;
     }
@@ -1070,7 +1078,11 @@ finish:
         PrintAndLogEx(WARNING, "The flashing procedure failed, follow the suggested steps!");
     }
 
-    ret = flash_stop_flashing();
+    // keep the first error, a clean stop must not turn a failed write into "All done"
+    int stop_ret = flash_stop_flashing();
+    if (ret == PM3_SUCCESS) {
+        ret = stop_ret;
+    }
     CloseProxmark(g_session.current_device);
 
 finish2:
@@ -1080,6 +1092,9 @@ finish2:
 
     if (ret == PM3_SUCCESS) {
         PrintAndLogEx(SUCCESS, _CYAN_("All done"));
+    } else if (ret == FLASH_REOPEN_PORT) {
+        PrintAndLogEx(INFO, "Bootloader started, nothing written yet");
+        return ret;
     } else if (ret == PM3_EOPABORTED) {
         PrintAndLogEx(FAILED, "Aborted by user");
     } else {
@@ -1151,6 +1166,8 @@ int main(int argc, char *argv[]) {
     uint32_t dumpmem_addr = 0;
     uint32_t dumpmem_len = 512 * 1024;
     bool dumpmem_raw = false;
+    const char *dfu_filename = NULL;
+    uint32_t dfu_addr = DFUSE_DEFAULT_ADDRESS;
 
     // color management:
     // 1. default = no color
@@ -1415,6 +1432,26 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        // write through the MCU ROM DFU loader
+        if (strcmp(argv[i], "--dfu") == 0) {
+            if (i + 1 == argc) {
+                PrintAndLogEx(ERR, _RED_("ERROR:") " missing file specification after --dfu\n");
+                show_help(false, exec_name);
+                return 1;
+            }
+            dfu_filename = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "--dfuaddr") == 0) {
+            if (i + 1 == argc) {
+                PrintAndLogEx(ERR, _RED_("ERROR:") " missing address specification after --dfuaddr\n");
+                show_help(false, exec_name);
+                return 1;
+            }
+            dfu_addr = strtoul(argv[++i], NULL, 0);
+            continue;
+        }
+
         // go to flash mode
         if (strcmp(argv[i], "--flash") == 0) {
             flash_mode = true;
@@ -1503,14 +1540,19 @@ int main(int argc, char *argv[]) {
         exit(EXIT_SUCCESS);
     }
 
+    if (dfu_filename != NULL) {
+        int res = dfuse_flash_file(port, dfu_filename, dfu_addr);
+        exit((res == PM3_SUCCESS) ? EXIT_SUCCESS : EXIT_FAILURE);
+    }
+
     if (flash_mode) {
-        flash_pm3(port, flash_num_files, flash_filenames, flash_can_write_bl, flash_force);
-        exit(EXIT_SUCCESS);
+        int res = flash_pm3(port, flash_num_files, flash_filenames, flash_can_write_bl, flash_force);
+        exit((res == FLASH_REOPEN_PORT) ? FLASH_REOPEN_EXIT_CODE : ((res == PM3_SUCCESS) ? EXIT_SUCCESS : EXIT_FAILURE));
     }
 
     if (reboot_bootloader_mode) {
-        reboot_bootloader_pm3(port);
-        exit(EXIT_SUCCESS);
+        int res = reboot_bootloader_pm3(port);
+        exit((res == PM3_SUCCESS || res == FLASH_REOPEN_PORT) ? EXIT_SUCCESS : EXIT_FAILURE);
     }
 
     if (script_cmd) {

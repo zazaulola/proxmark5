@@ -17,6 +17,7 @@
 //-----------------------------------------------------------------------------
 
 #include "comms.h"
+#include "uart/usbfs_linux.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -825,7 +826,8 @@ bool OpenProxmark(pm3_device_t **dev, const char *port, bool wait_for_port, int 
             msleep(500);
             PrintAndLogEx(INPLACE, "% 3i", timeout - openCount - 1);
 
-        } while (++openCount < timeout && (sp == INVALID_SERIAL_PORT || sp == CLAIMED_SERIAL_PORT));
+            // a usb: port is one given USB device, it won't show up later
+        } while (++openCount < timeout && (sp == INVALID_SERIAL_PORT || sp == CLAIMED_SERIAL_PORT) && (usbfs_is_port(port) == false));
     }
 
     // check result of uart opening

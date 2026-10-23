@@ -47,6 +47,10 @@ For more options, look [here](#Build-Extras)
 
 ## Flashing
 
+> [!TIP]
+> No PC at hand? The whole procedure below, DFU recovery included, works from an Android phone
+> with Termux, see [Flashing a Proxmark5 from the phone](../../termux_notes.md#flashing-a-proxmark5-from-the-phone-no-pc-and-no-root).
+
 ### Flashing Considerations
 * The same client can handle both Proxmark3 and Proxmark5, there is no need to compile separate clients if you own both pieces of hardware.
 * Don't forget to [disable ModemManager](../Installation_Instructions/ModemManager-Must-Be-Discarded.md)

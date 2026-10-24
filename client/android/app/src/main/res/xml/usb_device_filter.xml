@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Proxmark3/5 CDC (J. Westhues VID, PM3 RFID instrument PID) -->
+    <usb-device vendor-id="39620" product-id="19343" />
+    <!-- Artery AT32 ROM DFU loader the PM5 shows in bootloader/recovery mode -->
+    <usb-device vendor-id="11836" product-id="57105" />
+</resources>

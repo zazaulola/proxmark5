@@ -1,0 +1,85 @@
+name: Android GUI
+
+# Builds the Proxmark5 Android app (client/android). The container used for
+# development can't fetch the Android SDK, so the APK is built here, where the
+# SDK and NDK are available. Artifact: an installable debug APK.
+
+on:
+  push:
+    paths:
+      - 'client/android/**'
+      - 'client/src/**'
+      - 'client/include/**'
+      - 'client/deps/**'
+      - 'common/**'
+      - 'include/**'
+      - '.github/workflows/android-gui.yml'
+  pull_request:
+    paths:
+      - 'client/android/**'
+      - 'client/src/**'
+      - 'client/include/**'
+      - 'client/deps/**'
+      - 'common/**'
+      - 'include/**'
+      - '.github/workflows/android-gui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parsers:
+    name: Parser unit tests (JVM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Run parser tests
+        working-directory: client/android
+        run: ./gradlew -Pparsers.only :parsers:test --no-daemon --console=plain
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parser-test-report
+          path: client/android/parsers/build/reports/tests/
+
+  apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 27.1.12297006
+      CMAKE_VERSION: 3.22.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" \
+                     "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
+
+      - name: Build APK
+        working-directory: client/android
+        run: ./gradlew :app:assembleDebug --no-daemon --console=plain -Ppm3.ndkVersion=${NDK_VERSION}
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp client/android/app/build/outputs/apk/debug/*.apk out/proxmark5-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proxmark5-android-debug
+          path: out/proxmark5-debug.apk
+          if-no-files-found: error

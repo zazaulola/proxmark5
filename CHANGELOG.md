@@ -3,6 +3,8 @@ All notable changes to this project will be documented in this file.
 This project uses the changelog in accordance with [keepchangelog](http://keepachangelog.com/). Please use this to write notable changes, which is not the same as git commit log...
 
 ## [unreleased][unreleased]
+- Added `client/android` - a native Android GUI (no PC, no root, no Termux): the client runs as a JNI library over the `usb:` usbfs transport on a descriptor from Android's own USB permission, with a device/version screen, one-tap card detect (`hf search`/`lf search`) and a full ANSI console; APK built in the new `Android GUI` workflow
+- Added GitHub workflow `Android GUI` building the app's debug APK and running the parser unit tests
 - Added `usb:` client port: USB-CDC straight over Linux usbfs, so Termux reaches the Proxmark through `termux-usb` without root, bridge app or libusb; `pm3-termux-usb` wraps it and `pm3`/`pm3-flash*` use it in Termux
 - Added `--dfu <file.bin>` to the client: writes a Proxmark5 through the AT32 ROM DFU loader (2e3c:df11) over a `usb:` port, like `dfu-util -s 0x08000000:leave`, with read-back check
 - Changed flasher - on a `usb:` port it exits with code 3 when the device reboots into its bootloader instead of waiting 60 s for a port that can't come back; `--flash` now exits non-zero on failure

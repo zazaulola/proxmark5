@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material3 / dynamic color are applied in Compose; this is just the splash-time theme -->
+    <style name="Theme.Proxmark5" parent="android:Theme.Material.NoActionBar" />
+</resources>

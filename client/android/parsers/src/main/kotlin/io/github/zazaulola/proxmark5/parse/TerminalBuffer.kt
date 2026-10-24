@@ -13,7 +13,12 @@ class TerminalBuffer(private val maxLines: Int = 5000) {
     private val escape = StringBuilder()
     private var pendingCr = false
 
-    /** Bumped on every change, so a UI can tell when to redraw. */
+    /**
+     * Bumped on every change, so a UI can tell when to redraw. Volatile: it is written on the
+     * reader thread (under the lock) and polled from the UI thread without one, so the poll
+     * needs a happens-before edge to see new values (and an atomic read of the 64-bit field).
+     */
+    @Volatile
     var revision = 0L
         private set
 

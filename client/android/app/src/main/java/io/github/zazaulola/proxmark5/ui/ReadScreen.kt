@@ -51,6 +51,19 @@ fun ReadScreen(vm: AppViewModel) {
                 Text("Определить карту")
             }
         }
+        Text(
+            "Кнопка только распознаёт карту (тип и UID) и ничего не сохраняет. " +
+                "Чтобы сохранить дамп, запустите команду дампа на вкладке «Терминал» — " +
+                "файл появится в папке:",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            vm.dumpDir,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         if (!connected) {
             Text(
                 "Сначала подключите Proxmark5 на вкладке «Устройство».",

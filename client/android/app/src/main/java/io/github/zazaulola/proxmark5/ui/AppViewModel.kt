@@ -54,6 +54,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val clientVersion get() = client.clientVersion
 
+    /** Where saved dumps land (shown on the read screen). */
+    val dumpDir get() = client.dumpDir
+
     init {
         viewModelScope.launch { client.ensureStarted() }
         startTerminalTicker()

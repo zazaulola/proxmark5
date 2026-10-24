@@ -30,6 +30,7 @@
 #include "cmdmain.h"
 #include "comms.h"
 #include "commonutil.h"
+#include "fileutils.h"
 #include "preferences.h"
 #include "ui.h"
 #include "util.h"
@@ -42,7 +43,9 @@ static int g_stdin_wr = -1;
 static int g_stdout_rd = -1;
 
 // Returns the read end of the output pipe, or -1. Only the first call sets things up.
-JNIEXPORT jint JNICALL JNI_FN(nativeInit)(JNIEnv *env, jclass clazz, jstring jhome) {
+// home: $HOME, where resources (dictionaries, scripts) are unpacked and read from.
+// dumpdir: where saved dumps go (an app directory a file manager can reach); "" keeps HOME.
+JNIEXPORT jint JNICALL JNI_FN(nativeInit)(JNIEnv *env, jclass clazz, jstring jhome, jstring jdump) {
     (void) clazz;
     if (g_stdout_rd >= 0) {
         return g_stdout_rd;
@@ -91,6 +94,18 @@ JNIEXPORT jint JNICALL JNI_FN(nativeInit)(JNIEnv *env, jclass clazz, jstring jho
     // the app renders ANSI colors itself
     g_session.supports_colors = true;
     g_session.emoji_mode = EMO_ALTTEXT;
+
+    // Send dumps to a directory the user can actually reach. preferences_load()
+    // resets spDump to $HOME (app-private), so override it here, every init.
+    if (jdump != NULL) {
+        const char *dump = (*env)->GetStringUTFChars(env, jdump, NULL);
+        if (dump != NULL) {
+            if (dump[0] != '\0') {
+                setDefaultPath(spDump, dump);
+            }
+            (*env)->ReleaseStringUTFChars(env, jdump, dump);
+        }
+    }
     return g_stdout_rd;
 }
 

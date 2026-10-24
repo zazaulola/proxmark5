@@ -1,6 +1,7 @@
 package io.github.zazaulola.proxmark5.core
 
 import android.content.Context
+import android.util.Log
 import io.github.zazaulola.proxmark5.parse.TerminalBuffer
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -33,6 +34,14 @@ class ClientController private constructor(context: Context) {
     private val running = AtomicBoolean(false)
     private val home = File(context.filesDir, "pm3home").apply { mkdirs() }
 
+    /**
+     * Where the client saves dumps. The app's external files dir is reachable from a file
+     * manager (Android/data/<pkg>/files/dumps); if there is no external storage we fall back
+     * to a folder under $HOME. Shown to the user so they know where a read card lands.
+     */
+    val dumpDir: String = (context.getExternalFilesDir(null)?.let { File(it, "dumps") }
+        ?: File(home, "dumps")).apply { mkdirs() }.absolutePath
+
     @Volatile
     private var started = false
 
@@ -44,7 +53,7 @@ class ClientController private constructor(context: Context) {
     suspend fun ensureStarted() = withContext(dispatcher) {
         if (started) return@withContext
         ResourceUnpacker.unpack(home)
-        val fd = NativeClient.nativeInit(home.absolutePath)
+        val fd = NativeClient.nativeInit(home.absolutePath, dumpDir)
         check(fd >= 0) { "native init failed" }
         clientVersion = NativeClient.nativeClientVersion()
         startReader(fd)
@@ -52,16 +61,20 @@ class ClientController private constructor(context: Context) {
     }
 
     private fun startReader(fd: Int) {
-        val stream = NativeClient.outputStream(fd)
+        // Decode as a UTF-8 stream, not per read: a multibyte glyph (box-drawing, emoji
+        // alt-text) split across a pipe read would otherwise turn into replacement chars.
+        val reader = NativeClient.outputStream(fd).reader(StandardCharsets.UTF_8)
         Thread({
-            val buf = ByteArray(8192)
+            val buf = CharArray(8192)
             try {
                 while (true) {
-                    val n = stream.read(buf)
+                    val n = reader.read(buf)
                     if (n < 0) break
-                    terminal.append(String(buf, 0, n, StandardCharsets.UTF_8))
+                    terminal.append(String(buf, 0, n))
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // Don't die silently: the pipe closing early used to stop all output with no trace.
+                Log.w("pm3-output", "client output reader stopped", e)
             }
         }, "pm3-output").apply { isDaemon = true }.start()
     }

@@ -91,6 +91,7 @@ if (NOT SKIPREADLINE EQUAL 1)
             CONFIGURE_COMMAND     ./configure CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} LD=${CMAKE_C_COMPILER} AR=${CMAKE_AR} RANLIB=${CMAKE_RANLIB} ${CFLAGS_EXTERNAL_LIB} --host=arm --disable-database  --with-fallbacks=ansi-generic,ansi-mini,color_xterm,dtterm,dumb,Eterm,Eterm-256color,Eterm-88color,eterm-color,gnome,gnome-256color,guru,hurd,iTerm.app,konsole,konsole-16color,konsole-256color,konsole-base,konsole-linux,konsole-solaris,konsole-vt100,kterm,kterm-color,linux,linux-16color,linux-basic,mac,mlterm,mlterm-256color,mrxvt,mrxvt-256color,mterm,mterm-ansi,mvterm,nsterm,nsterm-16color,nsterm-256color,pty,putty,putty-256color,putty-vt100,rxvt,rxvt-16color,rxvt-256color,rxvt-88color,rxvt-basic,rxvt-color,screen,screen-16color,screen-256color,simpleterm,st-16color,st-256color,st52,st52-color,stv52,tt,tt52,unknown,vt100,vt102,vte,vte-256color,xterm,xterm-16color,xterm-256color,xterm-88color,xterm-basic,xterm-bold,xterm-color,xterm-utf8,xterm-vt220,xterm-vt52,xterm1,xtermc,xtermm   --enable-termcap --without-ada --without-debug --without-dlsym --without-gpm --without-develop --without-tests --without-cxx-binding --with-termlib
             BUILD_IN_SOURCE       ON
             BUILD_COMMAND         make libs
+            BUILD_BYPRODUCTS      ${CMAKE_CURRENT_BINARY_DIR}/deps/ncurses/src/ncurses/lib/libtinfo.a
             INSTALL_COMMAND       ""
             LOG_DOWNLOAD          ON
         )
@@ -103,6 +104,7 @@ if (NOT SKIPREADLINE EQUAL 1)
             CONFIGURE_COMMAND     ./configure CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} LD=${CMAKE_C_COMPILER} AR=${CMAKE_AR} RANLIB=${CMAKE_RANLIB} ${CFLAGS_EXTERNAL_LIB} --host=arm --enable-static
             BUILD_IN_SOURCE       ON
             BUILD_COMMAND         make
+            BUILD_BYPRODUCTS      ${CMAKE_CURRENT_BINARY_DIR}/deps/readline/src/readline/libreadline.a
             INSTALL_COMMAND       ""
             LOG_DOWNLOAD          ON
         )
@@ -149,6 +151,7 @@ if(EMBED_BZIP2)
         CONFIGURE_COMMAND     mkdir -p ${BZIP2_BUILD_DIR} && git archive --format tar HEAD | tar -C ${BZIP2_BUILD_DIR} -x
         BUILD_IN_SOURCE       ON
         BUILD_COMMAND         make -C ${BZIP2_BUILD_DIR} -j4 CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} LD=${CMAKE_C_COMPILER} AR=${CMAKE_AR} RANLIB=${CMAKE_RANLIB} ${CFLAGS_EXTERNAL_LIB} libbz2.a
+        BUILD_BYPRODUCTS      ${BZIP2_BUILD_DIR}/libbz2.a
         INSTALL_COMMAND       ""
         LOG_DOWNLOAD          ON
     )
@@ -172,6 +175,7 @@ if(EMBED_LZ4)
         CONFIGURE_COMMAND     mkdir -p ${LZ4_BUILD_DIR} && git archive --format tar HEAD | tar -C ${LZ4_BUILD_DIR} -x
         BUILD_IN_SOURCE       ON
         BUILD_COMMAND         make -C ${LZ4_BUILD_DIR}/lib -j4 CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} LD=${CMAKE_C_COMPILER} AR=${CMAKE_AR} RANLIB=${CMAKE_RANLIB} ${CFLAGS_EXTERNAL_LIB} liblz4.a
+        BUILD_BYPRODUCTS      ${LZ4_BUILD_DIR}/lib/liblz4.a
         INSTALL_COMMAND       ""
         LOG_DOWNLOAD          ON
     )
@@ -201,6 +205,7 @@ if (NOT SKIPGD EQUAL 1)
             PREFIX                deps/gd
             CMAKE_ARGS            -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DENABLE_CPP=0 -DCMAKE_INSTALL_PREFIX=.
             PATCH_COMMAND         cat ${CMAKE_CURRENT_SOURCE_DIR}/deps/gd-static.patch | patch -p1
+            BUILD_BYPRODUCTS      ${GD_BUILD_DIR}/src/gd-build/lib/libgd.a
         )
         ExternalProject_Add_StepTargets(gd configure build install)
         set(GD_INCLUDE_DIRS ${GD_BUILD_DIR}/src/gd-build/include)

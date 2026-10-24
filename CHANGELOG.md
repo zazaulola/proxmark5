@@ -3,6 +3,7 @@ All notable changes to this project will be documented in this file.
 This project uses the changelog in accordance with [keepchangelog](http://keepachangelog.com/). Please use this to write notable changes, which is not the same as git commit log...
 
 ## [unreleased][unreleased]
+- Fixed client CMake embedded deps (bzip2/lz4/readline/ncurses/gd) to declare `BUILD_BYPRODUCTS`, so a cross-compile with the Ninja generator (e.g. the Android NDK build) no longer fails with "missing and no known rule to make it"; no-op for the Make generator
 - Added `client/android` - a native Android GUI (no PC, no root, no Termux): the client runs as a JNI library over the `usb:` usbfs transport on a descriptor from Android's own USB permission, with a device/version screen, one-tap card detect (`hf search`/`lf search`) and a full ANSI console; APK built in the new `Android GUI` workflow
 - Added GitHub workflow `Android GUI` building the app's debug APK and running the parser unit tests
 - Added `usb:` client port: USB-CDC straight over Linux usbfs, so Termux reaches the Proxmark through `termux-usb` without root, bridge app or libusb; `pm3-termux-usb` wraps it and `pm3`/`pm3-flash*` use it in Termux

@@ -63,11 +63,14 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # don't install the obsolete legacy "tools" package (its removal makes the action fail)
+          packages: ''
 
       - name: Install NDK and CMake
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" \
-                     "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
+          yes | sdkmanager "platforms;android-35" "build-tools;35.0.0" \
+                           "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
 
       - name: Build APK
         working-directory: client/android

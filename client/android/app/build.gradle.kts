@@ -90,8 +90,11 @@ val stageClientResources by tasks.registering(Sync::class) {
     into(layout.buildDirectory.dir("pm3-assets/pm3"))
     from(clientRoot.resolve("resources")) {
         into("resources")
-        // the 9 MB hardnested tables and other large crack data are a later feature
-        exclude("hardnested_tables/**", "hardnested_bf_bench_data.bin")
+        // Ship the hardnested bitflip tables (~9 MB, already lz4-compressed): `hf mf
+        // hardnested` and `hf mf autopwn` on a hardened card need them, and the client
+        // calls exit() if a table is missing — which would kill the whole app. Skip only
+        // the benchmark data, which real cracking never reads.
+        exclude("hardnested_bf_bench_data.bin")
     }
     from(clientRoot.resolve("dictionaries")) {
         into("dictionaries")

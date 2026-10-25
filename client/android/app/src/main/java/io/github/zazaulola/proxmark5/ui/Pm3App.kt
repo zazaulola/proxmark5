@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -24,6 +25,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 private enum class Tab(val label: String, val icon: ImageVector) {
     Device("Устройство", Icons.Filled.Memory),
     Read("Чтение", Icons.Filled.Nfc),
+    Firmware("Прошивка", Icons.Filled.SystemUpdate),
     Terminal("Терминал", Icons.Filled.Terminal),
 }
 
@@ -48,8 +50,9 @@ fun Pm3App(vm: AppViewModel) {
             ) { padding ->
                 Box(Modifier.fillMaxSize().padding(padding)) {
                     when (tab) {
-                        Tab.Device -> DeviceScreen(vm)
+                        Tab.Device -> DeviceScreen(vm, onOpenFirmware = { tab = Tab.Firmware })
                         Tab.Read -> ReadScreen(vm)
+                        Tab.Firmware -> FirmwareScreen(vm)
                         Tab.Terminal -> TerminalScreen(vm)
                     }
                 }

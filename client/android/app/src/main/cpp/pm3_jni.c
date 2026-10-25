@@ -30,7 +30,9 @@
 #include "cmdmain.h"
 #include "comms.h"
 #include "commonutil.h"
+#include "dfuse.h"
 #include "fileutils.h"
+#include "flash.h"
 #include "preferences.h"
 #include "ui.h"
 #include "util.h"
@@ -198,4 +200,91 @@ JNIEXPORT jstring JNICALL JNI_FN(nativeClientVersion)(JNIEnv *env, jclass clazz)
     char temp[256] = {0};
     format_version_information_short(temp, sizeof(temp), &g_version_information);
     return (*env)->NewStringUTF(env, temp);
+}
+
+// sha256 prefix of the ARM sources the client was built from. A firmware image built
+// from the same armsrc/common_arm tree carries the same value (tools/mkversion.sh),
+// which is what the flasher compares before it refuses an image without --force.
+JNIEXPORT jstring JNICALL JNI_FN(nativeClientArmSrc)(JNIEnv *env, jclass clazz) {
+    (void) clazz;
+    char armsrc[sizeof(g_version_information.armsrc) + 1] = {0};
+    memcpy(armsrc, g_version_information.armsrc, sizeof(g_version_information.armsrc));
+    return (*env)->NewStringUTF(env, armsrc);
+}
+
+// Flashes ELF images, like `pm3 --flash [--unlock-bootloader] [--force] --image ...`.
+// Returns PM3_SUCCESS, a PM3_E* error, or FLASH_REOPEN_PORT: the device was sent to its
+// bootloader, which is a new USB device, so open that one and call again with the same files.
+JNIEXPORT jint JNICALL JNI_FN(nativeFlash)(JNIEnv *env, jclass clazz, jstring jport, jobjectArray jfiles,
+                                           jboolean unlock_bl, jboolean force) {
+    (void) clazz;
+    jsize num = (*env)->GetArrayLength(env, jfiles);
+    if ((num <= 0) || (num > FLASH_MAX_FILES)) {
+        return PM3_EINVARG;
+    }
+
+    char *files[FLASH_MAX_FILES] = {0};
+    char *port = NULL;
+    int ret = PM3_EMALLOC;
+
+    const char *cport = (*env)->GetStringUTFChars(env, jport, NULL);
+    if (cport == NULL) {
+        goto out;
+    }
+    // flash_pm3() wants a writable port name
+    port = strdup(cport);
+    (*env)->ReleaseStringUTFChars(env, jport, cport);
+    if (port == NULL) {
+        goto out;
+    }
+
+    for (jsize i = 0; i < num; i++) {
+        jstring jfile = (jstring)(*env)->GetObjectArrayElement(env, jfiles, i);
+        if (jfile == NULL) {
+            ret = PM3_EINVARG;
+            goto out;
+        }
+        const char *cfile = (*env)->GetStringUTFChars(env, jfile, NULL);
+        if (cfile != NULL) {
+            files[i] = strdup(cfile);
+            (*env)->ReleaseStringUTFChars(env, jfile, cfile);
+        }
+        (*env)->DeleteLocalRef(env, jfile);
+        if (files[i] == NULL) {
+            goto out;
+        }
+    }
+
+    // the flasher opens the port itself
+    if (g_session.pm3_present) {
+        CloseProxmark(g_session.current_device);
+    }
+    ret = flash_pm3(port, (uint8_t) num, (const char **) files, unlock_bl == JNI_TRUE, force == JNI_TRUE);
+    fflush(stdout);
+
+out:
+    for (jsize i = 0; i < num; i++) {
+        free(files[i]);
+    }
+    free(port);
+    return ret;
+}
+
+// Writes a raw image (e.g. recovery.bin) through the PM5 AT32 ROM DFU loader, like `pm3 --dfu`.
+JNIEXPORT jint JNICALL JNI_FN(nativeDfuFlash)(JNIEnv *env, jclass clazz, jstring jport, jstring jfile, jint address) {
+    (void) clazz;
+    const char *port = (*env)->GetStringUTFChars(env, jport, NULL);
+    if (port == NULL) {
+        return PM3_EMALLOC;
+    }
+    const char *file = (*env)->GetStringUTFChars(env, jfile, NULL);
+    if (file == NULL) {
+        (*env)->ReleaseStringUTFChars(env, jport, port);
+        return PM3_EMALLOC;
+    }
+    int ret = dfuse_flash_file(port, file, (uint32_t) address);
+    fflush(stdout);
+    (*env)->ReleaseStringUTFChars(env, jfile, file);
+    (*env)->ReleaseStringUTFChars(env, jport, port);
+    return ret;
 }

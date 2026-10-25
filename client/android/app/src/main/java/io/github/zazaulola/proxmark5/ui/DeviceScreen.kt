@@ -28,7 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.zazaulola.proxmark5.parse.HwVersion
 
 @Composable
-fun DeviceScreen(vm: AppViewModel) {
+fun DeviceScreen(vm: AppViewModel, onOpenFirmware: () -> Unit) {
     val conn by vm.connection.collectAsStateWithLifecycle()
     val scroll = rememberScrollState()
 
@@ -58,8 +58,15 @@ fun DeviceScreen(vm: AppViewModel) {
                 InfoCard(
                     "Режим загрузчика (DFU)",
                     "Устройство в режиме AT32 DFU. Обычный клиент тут не подключается — " +
-                        "это режим для восстановления прошивки. Перезагрузите Proxmark в обычный режим.",
+                        "это режим для восстановления прошивки. Запишите образ recovery.bin " +
+                        "или перезагрузите Proxmark в обычный режим.",
                 )
+                Button(onClick = onOpenFirmware) { Text("Восстановить через DFU") }
+            }
+
+            Connection.Flashing -> {
+                InfoCard("Идёт прошивка", "Устройство занято прошивкой, ход виден на вкладке «Прошивка».")
+                OutlinedButton(onClick = onOpenFirmware) { Text("Открыть «Прошивку»") }
             }
 
             Connection.Connecting -> {
@@ -82,6 +89,9 @@ fun DeviceScreen(vm: AppViewModel) {
                     OutlinedButton(onClick = { vm.refreshVersion() }) { Text("Обновить") }
                     OutlinedButton(onClick = { vm.disconnect() }) { Text("Отключить") }
                 }
+                if (version?.firmwareMismatch == true) {
+                    Button(onClick = onOpenFirmware) { Text("Обновить прошивку") }
+                }
             }
         }
 
@@ -102,6 +112,7 @@ private fun StatusCard(conn: Connection) {
         is Connection.Connected -> "Подключено" to MaterialTheme.colorScheme.primary
         Connection.Connecting -> "Подключение…" to MaterialTheme.colorScheme.secondary
         is Connection.Dfu -> "Режим DFU" to Color(0xFFFFD166)
+        Connection.Flashing -> "Прошивка…" to MaterialTheme.colorScheme.tertiary
         is Connection.Failed -> "Ошибка" to MaterialTheme.colorScheme.error
         else -> "Нет устройства" to MaterialTheme.colorScheme.onSurfaceVariant
     }

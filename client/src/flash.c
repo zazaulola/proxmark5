@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <signal.h>
+#include <unistd.h>
 
 #include "ui.h"
 #include "elf.h"
@@ -1034,10 +1035,16 @@ int flash_write(flash_file_t *ctx, flash_dev_t *flash_dev) {
         uint32_t baddr = seg->start;
 
         int pct = 0;
+        int shown_pct = -1;
         void (*old_sigint)(int) = SIG_ERR;
         void (*old_sigwinch)(int) = SIG_ERR;
 
-        if (blocks > 50) {
+        // The animation repaints the whole terminal, so only draw it on a real one.
+        // Redirected output (a log file, the Android app's pipe) gets plain percentages.
+        bool animate = (blocks > 50) && isatty(STDOUT_FILENO);
+        bool plain_progress = (blocks > 50) && (animate == false);
+
+        if (animate) {
 
             old_sigint = signal(SIGINT, hadouken_on_sigint);
 #ifndef _WIN32
@@ -1055,9 +1062,11 @@ int flash_write(flash_file_t *ctx, flash_dev_t *flash_dev) {
             }
 
             if (write_block(baddr, ctx->ver_info->magic, data, block_size, flash_dev) < 0) {
-                if (blocks > 50) {
+                if (animate) {
                     hadouken_stop();
                     restore_progress_signals(old_sigint, old_sigwinch);
+                } else if (plain_progress) {
+                    PrintAndLogEx(NORMAL, "");
                 }
                 PrintAndLogEx(ERR, "Error writing block %d of %u", block, blocks);
                 return PM3_EFATAL;
@@ -1070,13 +1079,20 @@ int flash_write(flash_file_t *ctx, flash_dev_t *flash_dev) {
 
             if (blocks > 50) {
                 pct = (int)(block * 100) / blocks;
-                hadouken_set_progress(pct);
+                if (animate) {
+                    hadouken_set_progress(pct);
+                } else if (pct != shown_pct) {
+                    PrintAndLogEx(INPLACE, "Flashing %3d%%", pct);
+                    shown_pct = pct;
+                }
             }
         }
 
-        if (blocks > 50) {
+        if (animate) {
             hadouken_stop();
             restore_progress_signals(old_sigint, old_sigwinch);
+        } else if (plain_progress) {
+            PrintAndLogEx(NORMAL, "");
         }
         fflush(stdout);
     }

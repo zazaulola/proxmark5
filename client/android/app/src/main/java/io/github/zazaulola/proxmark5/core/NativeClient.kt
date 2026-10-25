@@ -34,6 +34,25 @@ object NativeClient {
     external fun nativeAbort()
     external fun nativeClientVersion(): String
 
+    /** Hash of the ARM sources the client was built from; a firmware from the same tree has the same. */
+    external fun nativeClientArmSrc(): String
+
+    /**
+     * Flashes ELF [files] on [port], like `pm3 --flash`. Returns 0, a negative PM3 error, or
+     * [FLASH_REOPEN_PORT]: the device went to its bootloader, a new USB device, so open that
+     * one and call again with the same files. [force] skips the client/firmware version check.
+     */
+    external fun nativeFlash(port: String, files: Array<String>, unlockBootloader: Boolean, force: Boolean): Int
+
+    /** Writes a raw image through the PM5 AT32 ROM DFU loader, like `pm3 --dfu`. 0 on success. */
+    external fun nativeDfuFlash(port: String, file: String, address: Int): Int
+
+    /** client/src/flash.h FLASH_REOPEN_PORT */
+    const val FLASH_REOPEN_PORT = 1
+
+    /** client/src/dfuse.h DFUSE_DEFAULT_ADDRESS */
+    const val DFU_ADDRESS = 0x08000000
+
     /**
      * Wraps the pipe read-fd as a stream. Must keep the [ParcelFileDescriptor] reachable
      * for the stream's whole life: a plain FileInputStream(pfd.fileDescriptor) lets the PFD

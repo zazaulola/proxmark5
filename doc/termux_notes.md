@@ -373,6 +373,14 @@ cd ~/proxmark5
 It contains `bootrom.elf`, `fullimage.elf` and `recovery.bin`. Building them in Termux is possible
 too, see [Compiling the Proxmark3 Firmware](#compiling-the-proxmark3-firmware), with `PLATFORM=PM5`.
 
+Tagged versions are also published as releases, which download without a GitHub login: the
+"Proxmark5 firmware release" workflow builds a chosen upstream or fork version into a `pm5-fw-*`
+release (`<variant>.fullimage.elf`, `<variant>.bootrom.elf`, `<variant>.recovery.bin`), e.g.
+```
+curl -LO https://github.com/zazaulola/proxmark5/releases/download/pm5-fw-v4.23346/pm5.fullimage.elf
+```
+The Android app (`client/android`) lists, builds and flashes these releases by itself.
+
 ### First flash of a new Proxmark5
 ^[Top](#top)
 

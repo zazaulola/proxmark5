@@ -3,6 +3,7 @@ All notable changes to this project will be documented in this file.
 This project uses the changelog in accordance with [keepchangelog](http://keepachangelog.com/). Please use this to write notable changes, which is not the same as git commit log...
 
 ## [unreleased][unreleased]
+- Fixed macOS build of `mfd_aes_brute` and `mfulc_des_brute` when Homebrew has no `openssl@3.6` keg: only existing OpenSSL include/lib directories are passed, since `-Werror -Wmissing-include-dirs` stopped on a missing one
 - Added Android GUI firmware screen: pick a firmware version from GitHub releases, have one built on GitHub Actions (upstream tag or branch, fork ref, standalone mode, PM5 extras, left-out modules), download it with SHA-256 check and flash it over USB OTG through the bootloader; also flashes the firmware bundled in the APK (built from the same tree as its client), local `.elf` files, and `recovery.bin` through the AT32 DFU loader
 - Added GitHub workflow `Proxmark5 firmware release` building PM5 bootrom/fullimage/recovery for a chosen upstream or fork version and publishing them as `pm5-fw-*` releases; it also builds each new upstream release daily
 - Changed flasher - when stdout is not a terminal (a log, the Android app) it prints plain `Flashing NN%` progress instead of the full-screen animation

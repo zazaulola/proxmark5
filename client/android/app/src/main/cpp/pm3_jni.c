@@ -21,6 +21,7 @@
 //-----------------------------------------------------------------------------
 
 #include <jni.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,6 +70,9 @@ JNIEXPORT jint JNICALL JNI_FN(nativeInit)(JNIEnv *env, jclass clazz, jstring jho
     if (pipe(out) != 0) {
         return -1;
     }
+    // A big stdout pipe so a burst of client output can't block the command thread (which
+    // also drives the device) faster than the app drains it. Best effort: ignore failure.
+    fcntl(out[1], F_SETPIPE_SZ, 1 << 20);
     if (pipe(in) != 0) {
         close(out[0]);
         close(out[1]);

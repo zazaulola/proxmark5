@@ -7,6 +7,9 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -67,20 +70,43 @@ class ClientController private constructor(context: Context) {
     }
 
     private fun startReader(fd: Int) {
-        // Decode as a UTF-8 stream, not per read: a multibyte glyph (box-drawing, emoji
-        // alt-text) split across a pipe read would otherwise turn into replacement chars.
-        val reader = NativeClient.outputStream(fd).reader(StandardCharsets.UTF_8)
+        // Drain the client's stdout pipe into the terminal. Read RAW BYTES and decode UTF-8
+        // incrementally, appending each chunk the moment read() returns. Do NOT wrap the fd in
+        // an InputStreamReader: on Android its StreamDecoder treats a FileInputStream as always
+        // "ready", so read(char[]) blocks until it has filled the whole buffer (or hits EOF,
+        // which never comes on a live pipe) and strands normal sub-buffer output — the terminal
+        // stayed empty. The carry ByteBuffer keeps a multibyte glyph split across reads intact.
+        val stream = NativeClient.outputStream(fd)
         Thread({
-            val buf = CharArray(8192)
+            val decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(CodingErrorAction.REPLACE)
+            val raw = ByteArray(8192)
+            val bb = ByteBuffer.allocate(raw.size * 2)
+            val cb = CharBuffer.allocate(raw.size * 2)
+            Log.i("pm3-output", "reader started, fd=$fd")
+            var total = 0L
             try {
                 while (true) {
-                    val n = reader.read(buf)
+                    val n = stream.read(raw)
                     if (n < 0) break
-                    terminal.append(String(buf, 0, n))
+                    if (total == 0L) Log.i("pm3-output", "first $n bytes from client")
+                    total += n
+                    bb.put(raw, 0, n)
+                    bb.flip()
+                    decoder.decode(bb, cb, false)
+                    cb.flip()
+                    if (cb.hasRemaining()) terminal.append(cb.toString())
+                    cb.clear()
+                    bb.compact()
                 }
+                Log.i("pm3-output", "reader hit EOF after $total bytes")
             } catch (e: Exception) {
-                // Don't die silently: the pipe closing early used to stop all output with no trace.
-                Log.w("pm3-output", "client output reader stopped", e)
+                Log.w("pm3-output", "reader stopped after $total bytes", e)
+            } finally {
+                // Close the read end so any later client write fails fast with EPIPE instead of
+                // blocking forever on a full pipe: a dead reader must never wedge the client.
+                runCatching { stream.close() }
             }
         }, "pm3-output").apply { isDaemon = true }.start()
     }
@@ -109,7 +135,9 @@ class ClientController private constructor(context: Context) {
         }
         try {
             terminal.append("\n[\u001b[32musb\u001b[0m] pm3 --> $cmd\n")
+            Log.i("pm3-exec", "run: $cmd (grab=$grab)")
             val code = NativeClient.nativeExec(cmd, grab)
+            Log.i("pm3-exec", "done: $cmd -> $code")
             val grabbed = if (grab) String(NativeClient.nativeTakeGrabbed(), StandardCharsets.UTF_8) else ""
             ExecResult(code, grabbed)
         } finally {

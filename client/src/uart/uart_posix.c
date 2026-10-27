@@ -45,6 +45,7 @@
 #include "ble_posix.h"
 #endif
 
+#include "usbfs_linux.h"
 #include "comms.h"
 #include "ui.h"
 #include "util_posix.h" // msleep
@@ -64,6 +65,7 @@ typedef struct {
     term_info tiNew;  // Terminal info during the transaction
     RingBuffer *udpBuffer;
     void *ble;        // ble_conn_t* when connected via ble: (HAVE_BLUEZ), else NULL
+    usbfs_dev_t *usb; // when connected via usb: (usbfs, e.g. termux-usb), else NULL
 } serial_port_unix_t_t;
 
 // see pm3_cmd.h
@@ -160,6 +162,7 @@ serial_port uart_open(const char *pcPortName, uint32_t speed, bool slient) {
     bool isBluetooth = false;
     bool isBLE = false;
     bool isUnixSocket = false;
+    bool isUSBFS = usbfs_is_port(prefix);
     if (strlen(prefix) > 4) {
         isTCP = (memcmp(prefix, "tcp:", 4) == 0);
         isUDP = (memcmp(prefix, "udp:", 4) == 0);
@@ -463,6 +466,38 @@ serial_port uart_open(const char *pcPortName, uint32_t speed, bool slient) {
         return INVALID_SERIAL_PORT;
 #endif // HAVE_BLUEZ
     }
+    if (isUSBFS) {
+        free(prefix);
+
+        usbfs_dev_t *dev = usbfs_open(pcPortName, slient);
+        if (dev == NULL) {
+            free(sp);
+            return INVALID_SERIAL_PORT;
+        }
+
+        if (usbfs_vid(dev) == PM5_DFU_VID && usbfs_pid(dev) == PM5_DFU_PID) {
+            if (slient == false) {
+                PrintAndLogEx(ERR, "This device is in the MCU " _YELLOW_("DFU mode") ", not in the Proxmark bootloader");
+                PrintAndLogEx(HINT, "Hint: use " _YELLOW_("--dfu <recovery.bin>") " to write it, or replug without holding the button");
+            }
+            usbfs_close(dev);
+            free(sp);
+            return INVALID_SERIAL_PORT;
+        }
+
+        if (usbfs_cdc_start(dev, slient) != 0) {
+            usbfs_close(dev);
+            free(sp);
+            return INVALID_SERIAL_PORT;
+        }
+
+        sp->usb = dev;
+        sp->fd = -1;
+        g_conn.send_via_ip = PM3_NONE;
+        g_conn.uart_speed = 115200;
+        return sp;
+    }
+
     // The socket for abstract namespace implement.
     // Is local socket buffer, not a TCP or any net connection!
     // so, you can't connect with address like: 127.0.0.1, or any IP
@@ -601,6 +636,11 @@ serial_port uart_open(const char *pcPortName, uint32_t speed, bool slient) {
 
 void uart_close(const serial_port sp) {
     serial_port_unix_t_t *spu = (serial_port_unix_t_t *)sp;
+    if (spu->usb) {
+        usbfs_close(spu->usb);
+        free(sp);
+        return;
+    }
 #ifdef HAVE_BLUEZ
     if (spu->ble) {
         ble_close((ble_conn_t *)spu->ble);
@@ -654,6 +694,18 @@ int uart_receive(const serial_port sp, uint8_t *pbtRx, uint32_t pszMaxRxLen, uin
         return (got > 0) ? PM3_SUCCESS : PM3_ENODATA;
     }
 #endif
+
+    if (spu->usb) {
+        size_t got = 0;
+        int ms = (int)(timeout.tv_sec * 1000 + timeout.tv_usec / 1000);
+        pthread_once(&wakeup_once, uart_wakeup_create);
+        int r = usbfs_cdc_recv(spu->usb, pbtRx, pszMaxRxLen, &got, ms, wakeup_pipe[0]);
+        *pszRxLen = (uint32_t)got;
+        if (r < 0) {
+            return PM3_ENOTTY;
+        }
+        return (got > 0) ? PM3_SUCCESS : PM3_ENODATA;
+    }
 
     do {
         int res;
@@ -801,6 +853,15 @@ int uart_send(const serial_port sp, const uint8_t *pbtTx, const uint32_t len) {
     }
 #endif
 
+    if (spu->usb) {
+        int r = usbfs_cdc_send(spu->usb, pbtTx, len);
+        if (r == -ETIMEDOUT) {
+            PrintAndLogEx(ERR, "UART:: write time-out");
+            return PM3_ETIMEOUT;
+        }
+        return (r == 0) ? PM3_SUCCESS : PM3_ENOTTY;
+    }
+
     while (pos < len) {
         // Reset file descriptor
         FD_ZERO(&rfds);
@@ -834,6 +895,11 @@ int uart_send(const serial_port sp, const uint8_t *pbtTx, const uint32_t len) {
 
 bool uart_set_speed(serial_port sp, const uint32_t uiPortSpeed) {
     const serial_port_unix_t_t *spu = (serial_port_unix_t_t *)sp;
+    if (spu->usb) {
+        // USB-CDC has no real baud rate
+        g_conn.uart_speed = uiPortSpeed;
+        return true;
+    }
 #ifdef HAVE_BLUEZ
     if (spu->ble) {
         // no termios baud on a BLE socket; accept silently
@@ -946,6 +1012,10 @@ uint32_t uart_get_speed(const serial_port sp) {
     struct termios ti;
     uint32_t uiPortSpeed;
     const serial_port_unix_t_t *spu = (serial_port_unix_t_t *)sp;
+
+    if (spu->usb) {
+        return (g_conn.uart_speed != 0) ? g_conn.uart_speed : 115200;
+    }
 
 #ifdef HAVE_BLUEZ
     if (spu->ble) {

@@ -24,6 +24,13 @@
 
 #define FLASH_MAX_FILES 4
 
+// Returned (positive) by the flash entry points when the device was sent to its
+// bootloader but the port cannot follow it there: a usb: port is bound to one
+// USB enumeration, so the caller has to open the new device and run again.
+#define FLASH_REOPEN_PORT 1
+// Process exit code the client uses for FLASH_REOPEN_PORT (see pm3-termux-usb)
+#define FLASH_REOPEN_EXIT_CODE 3
+
 typedef struct {
     void *data;
     uint32_t start;

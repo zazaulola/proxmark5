@@ -396,6 +396,7 @@ set (TARGET_SOURCES
         ${PM3_ROOT}/client/src/uart/uart_posix.c
         ${PM3_ROOT}/client/src/uart/ble_posix.c
         ${PM3_ROOT}/client/src/uart/uart_win32.c
+        ${PM3_ROOT}/client/src/uart/usbfs_linux.c
         ${PM3_ROOT}/client/src/ui/overlays.ui
         ${PM3_ROOT}/client/src/ui/image.ui
         ${PM3_ROOT}/client/src/aidsearch.c
@@ -498,6 +499,7 @@ set (TARGET_SOURCES
         ${PM3_ROOT}/client/src/cmdusart.c
         ${PM3_ROOT}/client/src/cmdwiegand.c
         ${PM3_ROOT}/client/src/comms.c
+        ${PM3_ROOT}/client/src/dfuse.c
         ${PM3_ROOT}/client/src/fileutils.c
         ${PM3_ROOT}/client/src/flash.c
         ${PM3_ROOT}/client/src/frame_data2.c

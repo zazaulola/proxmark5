@@ -867,6 +867,7 @@ SRCS =  mifare/aiddesfire.c \
         cipurse/cipursetest.c \
         emrtd/emrtd_pace.c \
         emrtd/emrtd_pacetest.c \
+        dfuse.c \
         fileutils.c \
         flash.c \
         frame_data2.c \
@@ -932,6 +933,7 @@ SRCS =  mifare/aiddesfire.c \
         uart/uart_posix.c \
         uart/ble_posix.c \
         uart/uart_win32.c \
+        uart/usbfs_linux.c \
         scripting.c \
         ui.c \
         util.c \

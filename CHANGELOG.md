@@ -3,6 +3,11 @@ All notable changes to this project will be documented in this file.
 This project uses the changelog in accordance with [keepchangelog](http://keepachangelog.com/). Please use this to write notable changes, which is not the same as git commit log...
 
 ## [unreleased][unreleased]
+- Added `usb:` client port: USB-CDC straight over Linux usbfs, so Termux reaches the Proxmark through `termux-usb` without root, bridge app or libusb; `pm3-termux-usb` wraps it and `pm3`/`pm3-flash*` use it in Termux
+- Added `--dfu <file.bin>` to the client: writes a Proxmark5 through the AT32 ROM DFU loader (2e3c:df11) over a `usb:` port, like `dfu-util -s 0x08000000:leave`, with read-back check
+- Changed flasher - on a `usb:` port it exits with code 3 when the device reboots into its bootloader instead of waiting 60 s for a port that can't come back; `--flash` now exits non-zero on failure
+- Fixed flasher - a failed write no longer ends with "All done"
+- Added GitHub workflow building Proxmark5 bootrom/fullimage/recovery images as downloadable artifacts
 - Changed `hf seos info` - now prints UID, ATQA, SAK, ATS, MIFARE Classic emulation, which SEOS AIDs answer and the known AIDs found (@antoniovazquezblanco)
 - Fixed `hf seos managekeys -p` - key table columns stay aligned for slots 10 and up (@antoniovazquezblanco)
 - Fixed `aidlist.json` - uppercased the SEOS, TeslaDAP and LA Tap AIDs (@antoniovazquezblanco)

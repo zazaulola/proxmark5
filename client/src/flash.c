@@ -17,6 +17,7 @@
 //-----------------------------------------------------------------------------
 
 #include "flash.h"
+#include "uart/usbfs_linux.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -559,6 +560,15 @@ static int enter_bootloader(char *serial_port_name, bool wait_appear) {
         msleep(500);
         PrintAndLogEx(SUCCESS, _CYAN_("Trigger restart..."));
         CloseProxmark(g_session.current_device);
+
+        // A usb: port is one USB enumeration (an fd or a /dev/bus/usb node),
+        // it cannot follow the device through its reset.
+        if (usbfs_is_port(serial_port_name)) {
+            PrintAndLogEx(INFO, "The device comes back as a new USB device, run the command again to continue");
+            PrintAndLogEx(HINT, "Hint: " _YELLOW_("pm3-termux-usb") " does that by itself");
+            return FLASH_REOPEN_PORT;
+        }
+
         // Let time to OS to make the port disappear
         msleep(1000);
 

@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+
+# Run the Proxmark client in Termux over a USB OTG cable, without root.
+#
+# Android gives apps no /dev/ttyACM*, but Termux:API's termux-usb hands a
+# program a file descriptor for a USB device once the user allows it. This
+# script asks for that permission and starts the client on that descriptor
+# (port "usb:", see client/src/uart/usbfs_linux.h). The client needs no extra
+# library for it.
+#
+# Flashing works too. When the device has to reboot into its bootloader it
+# comes back as a new USB device: the client then exits with code 3 and this
+# script waits for the new device, asks for permission again (tap OK once more)
+# and runs the same command again.
+#
+# Needs: the Termux:API app (F-Droid) and `pkg install termux-api`.
+#
+# Usage: pm3-termux-usb [--device /dev/bus/usb/BBB/DDD] [client options...]
+#   e.g. pm3-termux-usb
+#        pm3-termux-usb -c "hw version"
+#        pm3-termux-usb --flash --unlock-bootloader --image bootrom.elf --image fullimage.elf
+#        pm3-termux-usb --dfu recovery.bin        (Proxmark5 in DFU mode, see doc/termux_notes.md)
+
+# Exit code of the client when the device went to its bootloader (FLASH_REOPEN_EXIT_CODE)
+REOPEN_EXIT_CODE=3
+MAX_REOPEN=3
+
+# Second stage: termux-usb runs us again with the device fd as last argument
+# (or in $TERMUX_USB_FD with termux-usb -E).
+if [ -n "$PM3_TERMUX_USB_STAGE2" ]; then
+    if [ $# -gt 0 ]; then
+        export TERMUX_USB_FD="${!#}"
+    fi
+    # termux-usb captures our stdout ($(...)) and prints it only at the end:
+    # write to the stdout the first stage was given instead (kept open as fd 3)
+    if { true >&3; } 2>/dev/null; then
+        exec 1>&3 3>&-
+    elif [ ! -t 1 ]; then
+        exec 1>&2
+    fi
+    eval "set -- $PM3_TERMUX_USB_ARGS"
+    "$PM3_TERMUX_USB_CLIENT" "$@"
+    rc=$?
+    echo "$rc" > "$PM3_TERMUX_USB_RC"
+    exit $rc
+fi
+
+PM3PATH=$(cd "$(dirname "$0")" && pwd)
+SELF="$PM3PATH/$(basename "$0")"
+
+if [ -x "$PM3PATH/client/proxmark3" ]; then
+    CLIENT="$PM3PATH/client/proxmark3"
+elif [ -x "$PM3PATH/client/build/proxmark3" ]; then
+    CLIENT="$PM3PATH/client/build/proxmark3"
+elif [ -x "$PM3PATH/proxmark3" ]; then
+    CLIENT="$PM3PATH/proxmark3"
+else
+    CLIENT=$(command -v proxmark3)
+fi
+if [ -z "$CLIENT" ]; then
+    echo >&2 "[!!] proxmark3 client not found, did you compile it?"
+    exit 1
+fi
+
+if ! command -v termux-usb >/dev/null 2>&1; then
+    echo >&2 "[!!] termux-usb not found: install the Termux:API app (F-Droid) and run: pkg install termux-api"
+    exit 1
+fi
+
+DEVICE="$PM3_USB_DEVICE"
+if [ "$1" == "--device" ]; then
+    DEVICE="$2"
+    shift 2
+fi
+
+# The client takes the descriptor from $TERMUX_USB_FD on a bare "usb:" port.
+# Keep a usb:/usbfd: port the caller gave (e.g. from the pm3 script), else add one.
+HAS_PORT=false
+for a in "$@"; do
+    case "$a" in
+        usb:|usbfd:) HAS_PORT=true ;;
+    esac
+done
+if ! $HAS_PORT; then
+    set -- -p usb: "$@"
+fi
+
+ARGS=""
+for a in "$@"; do
+    ARGS+="$(printf '%q' "$a") "
+done
+
+list_devices() {
+    # termux-usb -l prints a JSON array of device paths
+    termux-usb -l 2>/dev/null | tr -d '[]", ' | grep '^/dev/'
+}
+
+# Pick the device to use. $1: a path to avoid (the one that just went away).
+pick_device() {
+    local avoid="$1" waited=0 devices
+    while true; do
+        mapfile -t devices < <(list_devices)
+        if [ ${#devices[@]} -eq 1 ] && { [ "${devices[0]}" != "$avoid" ] || [ $waited -ge 6 ]; }; then
+            DEVICE="${devices[0]}"
+            return 0
+        fi
+        if [ ${#devices[@]} -gt 1 ]; then
+            echo >&2 "[!!] several USB devices found, pick one with --device:"
+            printf >&2 '       %s\n' "${devices[@]}"
+            return 1
+        fi
+        if [ $waited -eq 0 ]; then
+            echo "[=] Waiting for the Proxmark on USB (OTG adapter, cable on the button side)..."
+        fi
+        if [ $waited -ge 120 ]; then
+            echo >&2 "[!!] no USB device found"
+            return 1
+        fi
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+}
+
+if [ -z "$DEVICE" ]; then
+    pick_device "" || exit 1
+fi
+
+RCFILE=$(mktemp "${TMPDIR:-/tmp}/pm3-termux-usb.XXXXXX") || exit 1
+trap 'rm -f "$RCFILE"' EXIT
+
+unset TERMUX_USB_FD
+export PM3_TERMUX_USB_STAGE2=1
+export PM3_TERMUX_USB_ARGS="$ARGS"
+export PM3_TERMUX_USB_CLIENT="$CLIENT"
+export PM3_TERMUX_USB_RC="$RCFILE"
+
+for (( run = 0; run <= MAX_REOPEN; run++ )); do
+    echo "[=] Using USB device $DEVICE (tap OK on the Android permission prompt if one shows up)"
+    : > "$RCFILE"
+    termux-usb -r -e "$SELF" "$DEVICE" 3>&1
+    rc=$?
+    if [ -s "$RCFILE" ]; then
+        rc=$(cat "$RCFILE")
+    elif [ $rc -eq 0 ]; then
+        # the client never ran: permission refused or device gone
+        echo >&2 "[!!] could not open $DEVICE, was the permission granted?"
+        exit 1
+    fi
+
+    if [ "$rc" != "$REOPEN_EXIT_CODE" ]; then
+        exit "$rc"
+    fi
+
+    echo "[=] The Proxmark restarted into its bootloader, reconnecting..."
+    sleep 1
+    pick_device "$DEVICE" || exit 1
+done
+
+echo >&2 "[!!] the device keeps restarting, giving up"
+exit 1

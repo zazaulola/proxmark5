@@ -7,6 +7,9 @@ kotlin {
 }
 
 dependencies {
+    // org.json is part of Android; the JVM tests bring their own copy
+    compileOnly("org.json:json:20240303")
+    testImplementation("org.json:json:20240303")
     testImplementation(kotlin("test"))
 }
 

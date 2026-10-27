@@ -3,6 +3,9 @@
 
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
 
+    <!-- firmware releases and builds on GitHub -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name=".core.ClientApp"
         android:allowBackup="true"

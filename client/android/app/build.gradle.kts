@@ -6,6 +6,20 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Standalone modes a PM5 firmware accepts (armsrc/Standalone/Makefile.hal), offered by the
+// "build firmware" form of the firmware screen. The PM5 has neither the BT add-on nor a
+// smartcard slot, so the modes that need them are left out.
+val standaloneModes: String = rootDir.resolve("../../armsrc/Standalone/Makefile.hal").let { hal ->
+    if (!hal.exists()) return@let ""
+    val lines = hal.readLines()
+    fun list(name: String) = lines
+        .filter { Regex("^$name\\s*[:+]?=").containsMatchIn(it) }
+        .flatMap { it.substringAfter("=").trim().split(Regex("\\s+")) }
+        .filter { it.isNotBlank() }
+    (list("STANDALONE_MODES") - list("STANDALONE_MODES_REQ_BT").toSet() -
+        list("STANDALONE_MODES_REQ_SMARTCARD").toSet()).joinToString(",")
+}
+
 android {
     namespace = "io.github.zazaulola.proxmark5"
     compileSdk = 35
@@ -17,6 +31,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "STANDALONE_MODES", "\"$standaloneModes\"")
         ndk {
             // arm64 covers every modern phone; add armeabi-v7a for older ones
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -42,7 +57,8 @@ android {
         buildConfig = true
     }
 
-    // client resources (dictionaries, lua, json) staged into assets, see stageClientResources
+    // client resources (dictionaries, lua, json) staged into assets, see stageClientResources,
+    // and the bundled firmware, see stageFirmware
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("pm3-assets"))
 
     compileOptions {
@@ -106,6 +122,19 @@ val stageClientResources by tasks.registering(Sync::class) {
     from(clientRoot.resolve("cmdscripts")) { into("cmdscripts") }
 }
 
+// PM5 firmware built from this same tree (CI passes -Ppm3.firmwareDir=<dir>), shipped as
+// assets/firmware so the app can always flash a firmware that matches its client, even
+// offline. Without the property the APK has no bundled firmware and the app hides it.
+val firmwareDir: String? = providers.gradleProperty("pm3.firmwareDir").orNull
+val stageFirmware by tasks.registering(Sync::class) {
+    into(layout.buildDirectory.dir("pm3-assets/firmware"))
+    if (firmwareDir != null) {
+        from(file(firmwareDir)) {
+            include("bootrom.elf", "fullimage.elf", "recovery.bin", "firmware.json")
+        }
+    }
+}
+
 tasks.named("preBuild") {
-    dependsOn(stageClientResources)
+    dependsOn(stageClientResources, stageFirmware)
 }

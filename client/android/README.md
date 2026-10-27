@@ -32,7 +32,9 @@ Compose UI  ──▶  ClientController (one client thread)  ──▶  JNI (pm3
   - `core/` — the JNI bridge (`NativeClient`), the single client thread and
     live console (`ClientController`), and asset unpacking (`ResourceUnpacker`).
   - `usb/` — finding, permitting and opening the device (`UsbTransport`).
-  - `ui/` — the three screens: device, read, terminal.
+  - `firmware/` — firmware releases, builds on GitHub Actions and downloads
+    (`FirmwareController`, `GitHubApi`).
+  - `ui/` — the screens: device, read, firmware, terminal.
   - `src/main/cpp/` — `pm3_jni.c` and the CMake glue that builds
     `client/experimental_lib` (the `LIBPM3` client) plus the bridge into
     `libpm3jni.so`.
@@ -69,7 +71,44 @@ The parser tests run on any JVM, no Android SDK:
    side, as for flashing).
 3. Allow the USB access prompt. The app connects and shows the device.
 
-The firmware on the Proxmark must match the client the app was built from — the
-device screen warns when it doesn't. Flash with `pm3-termux-usb` or the
-`Proxmark5 firmware` workflow artifacts for now; flashing from the app is a
-planned screen.
+The firmware on the Proxmark should match the client the app was built from — the
+device screen warns when it doesn't and leads to the firmware screen.
+
+## Firmware updates
+
+The **Прошивка** (firmware) tab updates the Proxmark5 to a chosen version, from the
+phone only.
+
+Firmware can't be compiled on a phone, and upstream releases
+(RfidResearchGroup/proxmark3) carry source code only, so the app works with
+prebuilt images:
+
+```
+ app: pick version + options ──▶ GitHub Actions "Proxmark5 firmware release"
+                                   (make PLATFORM=PM5 bootrom fullimage recovery)
+                                                │
+ app: list releases ◀── pm5-fw-<version> release of this repo: <variant>.fullimage.elf,
+          │                 <variant>.bootrom.elf, <variant>.recovery.bin, <variant>.json
+          ▼
+ download + SHA-256 check ──▶ flasher (flash_pm3 over usb:<fd>) ──▶ Proxmark5
+```
+
+- **Ready firmware**: the `pm5-fw-*` releases of the repository (no login
+  needed), plus the firmware **bundled in the APK**: CI builds it from the same
+  tree as the app's client, so it always matches and works offline. Each card
+  says whether its ARM source hash matches the client (`✓`).
+- **Build a version**: upstream release (v4.23346 is the first with PM5) or
+  `master`, or any ref of the fork; a standalone mode; the PM5 extras (BWM,
+  low-battery switches); modules to leave out. The app starts the workflow
+  through the GitHub API, follows the run and offers to flash the result. This
+  needs a fine-grained token for the repository with *Actions: read and write*,
+  stored only on the phone. A build that already exists is found without one.
+  The workflow file has to be on the repository's default branch for the API
+  to start it; the daily schedule builds each new upstream release by itself.
+- **Flashing** follows the device through its reboots: the firmware drops it
+  into the bootloader (a new USB device, so Android asks for access again), the
+  flasher writes there, then it boots the new firmware (one more prompt to
+  reconnect). Updating the bootloader too is an option.
+- **DFU recovery**: in AT32 DFU mode (2e3c:df11) the app writes a
+  `recovery.bin` (bundled, from a release, or a file) through the MCU loader.
+- A local `.elf` can be flashed too.

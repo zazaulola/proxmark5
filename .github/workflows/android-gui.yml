@@ -3,6 +3,8 @@ name: Android GUI
 # Builds the Proxmark5 Android app (client/android). The container used for
 # development can't fetch the Android SDK, so the APK is built here, where the
 # SDK and NDK are available. Artifact: an installable debug APK.
+# The APK also bundles PM5 firmware built from this same tree, so the app can always
+# flash a firmware that matches its client, even offline.
 
 on:
   push:
@@ -13,6 +15,9 @@ on:
       - 'client/deps/**'
       - 'common/**'
       - 'include/**'
+      - 'armsrc/**'
+      - 'bootrom/**'
+      - 'common_arm/**'
       - '.github/workflows/android-gui.yml'
   pull_request:
     paths:
@@ -22,6 +27,9 @@ on:
       - 'client/deps/**'
       - 'common/**'
       - 'include/**'
+      - 'armsrc/**'
+      - 'bootrom/**'
+      - 'common_arm/**'
       - '.github/workflows/android-gui.yml'
   workflow_dispatch:
 
@@ -72,9 +80,24 @@ jobs:
           yes | sdkmanager "platforms;android-35" "build-tools;35.0.0" \
                            "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
 
+      - name: Build the matching PM5 firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yqq make gcc-arm-none-eabi libnewlib-dev jq
+          make -j$((`nproc` + 1)) PLATFORM=PM5 bootrom fullimage recovery
+          mkdir -p "$RUNNER_TEMP/pm5-firmware"
+          cp bootrom/obj/bootrom.elf armsrc/obj/fullimage.elf recovery/recovery.bin "$RUNNER_TEMP/pm5-firmware/"
+          # same fields the firmware release manifest carries (tools/mkversion.sh lines 14 and 16)
+          jq -n --arg version "$(sed -n '14s/.*"\([^"]*\)".*/\1/p' armsrc/version_pm3.c)" \
+                --arg armsrc "$(sed -n '16s/.*"\([^"]*\)".*/\1/p' armsrc/version_pm3.c)" \
+                --arg commit "$GITHUB_SHA" \
+                '{variant: "pm5", platform: "PM5", version: $version, armsrc: $armsrc, commit: $commit}' \
+                > "$RUNNER_TEMP/pm5-firmware/firmware.json"
+          cat "$RUNNER_TEMP/pm5-firmware/firmware.json"
+
       - name: Build APK
         working-directory: client/android
-        run: ./gradlew :app:assembleDebug --no-daemon --console=plain -Ppm3.ndkVersion=${NDK_VERSION}
+        run: ./gradlew :app:assembleDebug --no-daemon --console=plain -Ppm3.ndkVersion=${NDK_VERSION} -Ppm3.firmwareDir=$RUNNER_TEMP/pm5-firmware
 
       - name: Collect APK
         run: |

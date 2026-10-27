@@ -14,14 +14,15 @@ ifneq (,$(findstring MINGW,$(platform)))
 endif
 
 # OS X needs linking to openssl
+# only the directories that exist: with -Werror, -Wmissing-include-dirs stops on a missing one
 ifeq ($(USE_BREW),1)
-    MYCFLAGS += -I$(BREW_PREFIX)/opt/openssl@3/include -I$(BREW_PREFIX)/opt/openssl@3.6/include
-    MYLDFLAGS += -L$(BREW_PREFIX)/opt/openssl@3/lib -L$(BREW_PREFIX)/opt/openssl@3.6/lib
+    MYCFLAGS += $(addprefix -I,$(wildcard $(BREW_PREFIX)/opt/openssl@3/include $(BREW_PREFIX)/opt/openssl@3.6/include))
+    MYLDFLAGS += $(addprefix -L,$(wildcard $(BREW_PREFIX)/opt/openssl@3/lib $(BREW_PREFIX)/opt/openssl@3.6/lib))
 endif
 
 ifeq ($(USE_MACPORTS),1)
-    MYCFLAGS += -I$(MACPORTS_PREFIX)/include/openssl-3 -I$(MACPORTS_PREFIX)/include/openssl-1.1
-    MYLDFLAGS += -L$(MACPORTS_PREFIX)/lib/openssl-3 -L$(MACPORTS_PREFIX)/lib/openssl-1.1
+    MYCFLAGS += $(addprefix -I,$(wildcard $(MACPORTS_PREFIX)/include/openssl-3 $(MACPORTS_PREFIX)/include/openssl-1.1))
+    MYLDFLAGS += $(addprefix -L,$(wildcard $(MACPORTS_PREFIX)/lib/openssl-3 $(MACPORTS_PREFIX)/lib/openssl-1.1))
 endif
 
 mfulc_des_brute : $(OBJDIR)/mfulc_des_brute.o $(MYOBJS)

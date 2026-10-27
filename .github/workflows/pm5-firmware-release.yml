@@ -1,0 +1,310 @@
+name: Proxmark5 firmware release
+
+# Builds Proxmark5 (PLATFORM=PM5) firmware of a chosen version and publishes it as a
+# release of this repository, so the Android app (client/android, "Прошивка" tab) can
+# list, download and flash it with no PC. Upstream RfidResearchGroup/proxmark3 releases
+# carry source code only, no firmware; PM5 support starts with upstream v4.23346.
+#
+# Release tag: pm5-fw-<upstream tag>, or pm5-fw-<source>-<commit7> for a branch or commit.
+# One set of assets per build variant (the build options), e.g. "pm5" or "pm5-bwm":
+#   <variant>.fullimage.elf  <variant>.bootrom.elf  <variant>.recovery.bin  <variant>.json
+# The release notes end with a machine-readable "<!-- pm5-firmware {...} -->" line.
+#
+# Variant names (the app computes the same, see parsers/FirmwareNaming.kt):
+#   pm5[-<extra>...][-sa_<standalone>|-nosa][-skip_<module>_<module>...], all lowercase,
+#   extras and modules sorted. Empty standalone = the default mode (LF_SAMYRUN).
+#
+# The daily schedule builds a new upstream release with the default variants.
+
+run-name: >-
+  ${{ github.event_name == 'schedule' && 'PM5 firmware: latest upstream release'
+  || format('PM5 firmware {0} {1} {2} {3}', inputs.source, inputs.ref || 'latest', inputs.variant, inputs.request_id) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Source tree: upstream (RfidResearchGroup/proxmark3) or fork (this repository)'
+        type: choice
+        options:
+          - upstream
+          - fork
+        default: upstream
+      ref:
+        description: 'Tag, branch or commit. Empty: latest upstream release / default branch of the fork'
+        type: string
+        default: ''
+      standalone:
+        description: 'STANDALONE mode, e.g. HF_MFCSIM. Empty: default (LF_SAMYRUN). "none": no standalone mode'
+        type: string
+        default: ''
+      extras:
+        description: 'PLATFORM_EXTRAS, space separated: BWM NO_LOWBATT_BEEP NO_LOWBATT_SHUTDOWN'
+        type: string
+        default: ''
+      skip:
+        description: 'Modules to leave out: SKIP_ tokens without the prefix, space separated, e.g. "HITAG FELICA"'
+        type: string
+        default: ''
+      variant:
+        description: 'Asset name prefix. Empty: derived from the options'
+        type: string
+        default: ''
+      request_id:
+        description: 'Free text shown in the run name, lets the app find its run'
+        type: string
+        default: ''
+  schedule:
+    - cron: '23 4 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    name: Resolve version and variants
+    runs-on: ubuntu-latest
+    outputs:
+      repo: ${{ steps.r.outputs.repo }}
+      source: ${{ steps.r.outputs.source }}
+      ref: ${{ steps.r.outputs.ref }}
+      commit: ${{ steps.r.outputs.commit }}
+      tag: ${{ steps.r.outputs.tag }}
+      is_tag: ${{ steps.r.outputs.is_tag }}
+      matrix: ${{ steps.r.outputs.matrix }}
+    steps:
+      - id: r
+        name: Resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          SOURCE: ${{ inputs.source || 'upstream' }}
+          REF: ${{ inputs.ref }}
+          STANDALONE: ${{ inputs.standalone }}
+          EXTRAS: ${{ inputs.extras }}
+          SKIP: ${{ inputs.skip }}
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          lower() { tr 'A-Z' 'a-z'; }
+          words() { tr -s ' \t' '\n\n' | sed '/^$/d'; }
+          die() { echo "::error::$*"; exit 1; }
+
+          case "$SOURCE" in
+            upstream) REPO=RfidResearchGroup/proxmark3 ;;
+            fork) REPO="$GITHUB_REPOSITORY" ;;
+            *) die "unknown source '$SOURCE'" ;;
+          esac
+          if [ -z "$REF" ]; then
+            if [ "$SOURCE" = upstream ]; then
+              REF=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)
+            else
+              REF=$(gh api "repos/$REPO" --jq .default_branch)
+            fi
+          fi
+          case "$REF" in
+            *[!A-Za-z0-9._/-]*|-*) die "bad ref '$REF'" ;;
+          esac
+          COMMIT=$(gh api "repos/$REPO/commits/$REF" --jq .sha) || die "'$REF' not found in $REPO"
+          if gh api "repos/$REPO/git/ref/tags/$REF" >/dev/null 2>&1; then
+            IS_TAG=true
+            TAG="pm5-fw-$(echo "$REF" | tr '/' '-')"
+          else
+            IS_TAG=false
+            TAG="pm5-fw-$SOURCE-${COMMIT:0:7}"
+          fi
+
+          # variant name from the options, mirrored by FirmwareNaming.kt
+          variant_of() {  # extras standalone skip
+            local v=pm5 t
+            for t in $(echo "$1" | words | lower | sort -u); do v="$v-$t"; done
+            case "$2" in
+              '') ;;
+              none|NONE) v="$v-nosa" ;;
+              *) v="$v-sa_$(echo "$2" | lower)" ;;
+            esac
+            t=$(echo "$3" | words | lower | sort -u | paste -sd_ -)
+            [ -n "$t" ] && v="$v-skip_$t"
+            echo "$v"
+          }
+          check_tokens() {
+            case "$1" in *[!A-Za-z0-9_\ ]*) die "bad $2: '$1'" ;; esac
+          }
+
+          if [ "$EVENT" = schedule ]; then
+            ENTRIES='[{"variant":"pm5","extras":"","standalone":"","skip":""},{"variant":"pm5-bwm","extras":"BWM","standalone":"","skip":""}]'
+          else
+            check_tokens "$EXTRAS" extras
+            check_tokens "$STANDALONE" standalone
+            check_tokens "$SKIP" skip
+            EXTRAS=$(echo "$EXTRAS" | words | tr 'a-z' 'A-Z' | sort -u | paste -sd' ' -)
+            SKIP=$(echo "$SKIP" | words | sort -u | paste -sd' ' -)
+            [ -n "$VARIANT" ] || VARIANT=$(variant_of "$EXTRAS" "$STANDALONE" "$SKIP")
+            case "$VARIANT" in *[!a-z0-9._-]*) die "bad variant '$VARIANT'" ;; esac
+            ENTRIES=$(jq -cn --arg v "$VARIANT" --arg e "$EXTRAS" --arg s "$STANDALONE" --arg k "$SKIP" \
+              '[{variant:$v, extras:$e, standalone:$s, skip:$k}]')
+          fi
+
+          # the schedule only builds what is missing; a manual run rebuilds
+          EXISTING='[]'
+          if [ "$EVENT" = schedule ]; then
+            EXISTING=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name]' 2>/dev/null || echo '[]')
+          fi
+          MATRIX=$(jq -cn --argjson e "$ENTRIES" --argjson have "$EXISTING" \
+            '[$e[] | select((.variant + ".fullimage.elf") as $f | ($have | index($f)) == null)]')
+
+          echo "Building $REPO $REF ($COMMIT) as $TAG: $MATRIX"
+          {
+            echo "repo=$REPO"
+            echo "source=$SOURCE"
+            echo "ref=$REF"
+            echo "commit=$COMMIT"
+            echo "tag=$TAG"
+            echo "is_tag=$IS_TAG"
+            echo "matrix=$MATRIX"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.variant }}
+    needs: resolve
+    if: needs.resolve.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.repo }}
+          ref: ${{ needs.resolve.outputs.commit }}
+          # full history and tags, so the version string reads like v4.23346
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Check Proxmark5 support
+        run: |
+          grep -q 'PLATFORM),PM5' common_arm/Makefile.hal || {
+            echo "::error::${{ needs.resolve.outputs.ref }} has no PLATFORM=PM5 (upstream added it in v4.23346)"
+            exit 1
+          }
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yqq make build-essential gcc-arm-none-eabi libnewlib-dev jq
+
+      - name: Build
+        env:
+          EXTRAS: ${{ matrix.extras }}
+          STANDALONE: ${{ matrix.standalone }}
+          SKIP: ${{ matrix.skip }}
+        run: |
+          set -euo pipefail
+          args=(PLATFORM=PM5 "PLATFORM_EXTRAS=$EXTRAS")
+          case "$STANDALONE" in
+            '') ;;
+            none|NONE) args+=(STANDALONE=) ;;
+            *) args+=("STANDALONE=$STANDALONE") ;;
+          esac
+          for m in $SKIP; do args+=("SKIP_$m=1"); done
+          echo "make ${args[*]}"
+          make -j$((`nproc` + 1)) "${args[@]}" bootrom fullimage
+          make "${args[@]}" recovery || echo "::warning::no recovery image for this version"
+
+      - name: Collect images
+        env:
+          VARIANT: ${{ matrix.variant }}
+          EXTRAS: ${{ matrix.extras }}
+          STANDALONE: ${{ matrix.standalone }}
+          SKIP: ${{ matrix.skip }}
+          REPO: ${{ needs.resolve.outputs.repo }}
+          SOURCE: ${{ needs.resolve.outputs.source }}
+          REF: ${{ needs.resolve.outputs.ref }}
+          COMMIT: ${{ needs.resolve.outputs.commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp armsrc/obj/fullimage.elf "out/$VARIANT.fullimage.elf"
+          cp bootrom/obj/bootrom.elf "out/$VARIANT.bootrom.elf"
+          if [ -f recovery/recovery.bin ]; then cp recovery/recovery.bin "out/$VARIANT.recovery.bin"; fi
+          # the fields tools/mkversion.sh writes: git version (line 14), ARM source hash (line 16)
+          GITVERSION=$(sed -n '14s/.*"\([^"]*\)".*/\1/p' armsrc/version_pm3.c)
+          ARMSRC=$(sed -n '16s/.*"\([^"]*\)".*/\1/p' armsrc/version_pm3.c)
+          FILES=$(cd out && for f in *; do
+                    jq -cn --arg n "$f" --arg h "$(sha256sum "$f" | cut -d' ' -f1)" --argjson s "$(stat -c %s "$f")" \
+                      '{($n): {size: $s, sha256: $h}}'
+                  done | jq -cs 'add')
+          jq -n --arg variant "$VARIANT" --arg extras "$EXTRAS" --arg standalone "$STANDALONE" --arg skip "$SKIP" \
+                --arg source "$SOURCE" --arg repo "$REPO" --arg ref "$REF" --arg commit "$COMMIT" \
+                --arg version "$GITVERSION" --arg armsrc "$ARMSRC" --arg built "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --argjson files "$FILES" \
+                '{variant: $variant, platform: "PM5", extras: $extras, standalone: $standalone, skip: $skip,
+                  source: $source, repo: $repo, ref: $ref, commit: $commit, version: $version,
+                  armsrc: $armsrc, built: $built, files: $files}' > "out/$VARIANT.json"
+          cat "out/$VARIANT.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pm5fw-${{ matrix.variant }}
+          path: out/
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pm5fw-*
+          merge-multiple: true
+          path: out
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          IS_TAG: ${{ needs.resolve.outputs.is_tag }}
+          REPO: ${{ needs.resolve.outputs.repo }}
+          SOURCE: ${{ needs.resolve.outputs.source }}
+          REF: ${{ needs.resolve.outputs.ref }}
+          COMMIT: ${{ needs.resolve.outputs.commit }}
+        run: |
+          set -euo pipefail
+          ls -la out
+          FIRST=$(ls out/*.json | head -n1)
+          VERSION=$(jq -r .version "$FIRST")
+          ARMSRC=$(jq -r .armsrc "$FIRST")
+          if [ "$IS_TAG" = true ]; then
+            TITLE="Proxmark5 firmware $REF"
+            PRE=()
+          else
+            TITLE="Proxmark5 firmware $SOURCE ${COMMIT:0:7} ($REF)"
+            PRE=(--prerelease)
+          fi
+          INFO=$(jq -cn --arg source "$SOURCE" --arg repo "$REPO" --arg ref "$REF" --arg commit "$COMMIT" \
+                       --arg version "$VERSION" --arg armsrc "$ARMSRC" \
+                       '{source: $source, repo: $repo, ref: $ref, commit: $commit, version: $version, armsrc: $armsrc}')
+          cat > notes.md <<EOF
+          Proxmark5 (PM5) firmware built from [$REPO@${COMMIT:0:7}](https://github.com/$REPO/tree/$COMMIT) ($REF).
+          Version string: \`$VERSION\`, ARM source hash \`$ARMSRC\`.
+
+          Flash it from the Proxmark5 Android app (tab «Прошивка»), or from Termux:
+          \`pm3-termux-usb --flash --image <variant>.fullimage.elf\` (see doc/termux_notes.md).
+
+          Assets per variant: \`<variant>.fullimage.elf\` (main firmware), \`<variant>.bootrom.elf\` (bootloader),
+          \`<variant>.recovery.bin\` (raw image for the AT32 DFU loader), \`<variant>.json\` (options and SHA-256).
+
+          <!-- pm5-firmware $INFO -->
+          EOF
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # a parallel run may create it first
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$TITLE" --notes-file notes.md --latest=false "${PRE[@]}" \
+              || gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          fi
+          gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber
+          echo "### $TITLE" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

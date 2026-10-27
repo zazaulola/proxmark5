@@ -49,6 +49,11 @@ class ClientController private constructor(context: Context) {
     var clientVersion: String = ""
         private set
 
+    /** See [NativeClient.nativeClientArmSrc]. */
+    @Volatile
+    var clientArmSrc: String = ""
+        private set
+
     /** Starts the client and the output reader. Safe to call more than once. */
     suspend fun ensureStarted() = withContext(dispatcher) {
         if (started) return@withContext
@@ -56,6 +61,7 @@ class ClientController private constructor(context: Context) {
         val fd = NativeClient.nativeInit(home.absolutePath, dumpDir)
         check(fd >= 0) { "native init failed" }
         clientVersion = NativeClient.nativeClientVersion()
+        clientArmSrc = NativeClient.nativeClientArmSrc()
         startReader(fd)
         started = true
     }
@@ -106,6 +112,34 @@ class ClientController private constructor(context: Context) {
             val code = NativeClient.nativeExec(cmd, grab)
             val grabbed = if (grab) String(NativeClient.nativeTakeGrabbed(), StandardCharsets.UTF_8) else ""
             ExecResult(code, grabbed)
+        } finally {
+            running.set(false)
+        }
+    }
+
+    /**
+     * Flashes ELF images, see [NativeClient.nativeFlash]. The client must not be connected:
+     * the flasher opens [port] itself. Returns -1 while another command runs.
+     */
+    suspend fun flash(port: String, files: List<String>, unlockBootloader: Boolean, force: Boolean): Int =
+        exclusive("flash ${files.joinToString(" ") { it.substringAfterLast('/') }}") {
+            NativeClient.nativeFlash(port, files.toTypedArray(), unlockBootloader, force)
+        }
+
+    /** Writes a raw image through the PM5 DFU loader, see [NativeClient.nativeDfuFlash]. */
+    suspend fun dfuFlash(port: String, file: String, address: Int = NativeClient.DFU_ADDRESS): Int =
+        exclusive("dfu ${file.substringAfterLast('/')}") {
+            NativeClient.nativeDfuFlash(port, file, address)
+        }
+
+    private suspend fun exclusive(label: String, block: () -> Int): Int = withContext(dispatcher) {
+        ensureStarted()
+        if (!running.compareAndSet(false, true)) {
+            return@withContext -1
+        }
+        try {
+            terminal.append("\n[\u001b[32musb\u001b[0m] pm3 --> $label\n")
+            block()
         } finally {
             running.set(false)
         }

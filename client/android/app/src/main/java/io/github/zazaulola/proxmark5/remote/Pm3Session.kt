@@ -596,6 +596,7 @@ class Pm3Session private constructor(context: Context) {
         conn.pid = snap.pid
         conn.attachedAtMs = System.currentTimeMillis()
         localFailure = null
+        takeStaleMarker(snap)
         applySnapshot(snap)
         // after the state: whoever acts on "bound" reads the service's snapshot, not the one from before
         _bound.value = true
@@ -742,7 +743,7 @@ class Pm3Session private constructor(context: Context) {
 
     // The session as the UI shows it: the service's, but an idle service that has no memory of the user leaving is still "left".
     private fun shown(b: SessionSnapshot) =
-        if (leftByUser && b.link == LinkState.IDLE && b.error.isEmpty() && !b.activity.running) b.copy(link = LinkState.LEFT) else b
+        if (leftByUser && b.link == LinkState.IDLE && b.error.isEmpty()) b.copy(link = LinkState.LEFT) else b
 
     // A failure of ours only stands in for a service with nothing going on; a session that is under way beats it.
     private fun publish() {
@@ -860,7 +861,7 @@ class Pm3Session private constructor(context: Context) {
         // a service that was doing something for the user: a planned end is a restart, any other is a loss; an idle one going away is no news
         val working = attached && (prev.link in WORKING || hadPending)
         // the process was ended on the way out of the session: the user has left, whatever the death looks like
-        val left = marker?.left == true
+        val left = marker?.left == true || (leaving && prev.link == LinkState.CLOSING)
         val dead = when {
             left -> gone(prev, LinkState.LEFT, "")
             working && marker != null -> gone(prev, LinkState.IDLE, RESTARTED)
@@ -885,7 +886,7 @@ class Pm3Session private constructor(context: Context) {
         if (marker != null) {
             ownKill?.let { follower.note(it) }
             if (marker.reconnect) reconnectAfterRestart()
-        } else if (working) {
+        } else if (working || left) {
             reportDeath(conn, dead)
         }
         ownKill = null
@@ -901,6 +902,25 @@ class Pm3Session private constructor(context: Context) {
         }
         file.delete()
         return marker?.takeIf { it.epoch == conn.epoch && it.pid == conn.pid }
+    }
+
+    // A service that ended while no UI was attached left its marker unread. The UI that comes next finds it here: the marker is
+    // deleted, and if the user was leaving when the process went, they are still gone. (A marker of the very epoch attached now is
+    // the note of a death still to come, and stays.)
+    private fun takeStaleMarker(snap: SessionSnapshot) {
+        val file = SessionPaths.exitMarker(app)
+        if (!file.exists()) return
+        val stale = try {
+            ExitMarker.parse(file.readText())
+        } catch (e: IOException) {
+            null
+        }
+        if (stale != null && stale.epoch == snap.epoch) return
+        file.delete()
+        if (stale?.left == true) {
+            leftByUser = true
+            leftEpoch = stale.epoch
+        }
     }
 
     // nothing of the service survives the death but what the client was told about the build

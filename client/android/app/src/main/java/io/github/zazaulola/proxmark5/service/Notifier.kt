@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Results go only to the listener of the UI process that sent the command (the owner in the id,
  * see SessionIds). A listener learns its owner from the first call that carries one ([claim]).
  */
-internal class Notifier(private val onOwnerGone: (Long) -> Unit) {
+internal class Notifier(private val onOwnerGone: (Long) -> Unit, private val onNoListeners: () -> Unit) {
     /** The cookie of a listener; the pm3-events thread only. */
     private class Subscriber {
         var owner = NO_OWNER
@@ -26,12 +26,18 @@ internal class Notifier(private val onOwnerGone: (Long) -> Unit) {
     private val executor = Executors.newSingleThreadExecutor(serviceThreads("pm3-events"))
     private val changePending = AtomicBoolean(false)
 
-    private val callbacks = object : RemoteCallbackList<IPm3Listener>() {
+    private val callbacks: RemoteCallbackList<IPm3Listener> = object : RemoteCallbackList<IPm3Listener>() {
         override fun onCallbackDied(callback: IPm3Listener?, cookie: Any?) {
             val subscriber = cookie as? Subscriber ?: return
-            executor.execute { ownerMayBeGone(subscriber.owner) }
+            executor.execute {
+                ownerMayBeGone(subscriber.owner)
+                if (listenerCount() == 0) onNoListeners()
+            }
         }
     }
+
+    /** How many UIs are attached. Any thread. */
+    fun listenerCount(): Int = callbacks.registeredCallbackCount
 
     /** Called on a binder thread: the listener must be in the list before the snapshot that attach returns is read. */
     fun register(listener: IPm3Listener) {

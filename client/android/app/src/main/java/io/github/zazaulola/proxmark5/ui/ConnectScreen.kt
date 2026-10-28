@@ -44,7 +44,7 @@ fun ConnectScreen(vm: AppViewModel, onOpenFirmware: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         TransportPicker()
-        StateCard(conn)
+        StateCard(conn, closing = session.link == LinkState.CLOSING)
 
         when (val c = conn) {
             is Connection.NoDevice -> {
@@ -95,15 +95,29 @@ fun ConnectScreen(vm: AppViewModel, onOpenFirmware: () -> Unit) {
             }
 
             Connection.Connecting -> {
+                val closing = session.link == LinkState.CLOSING
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                    Text("Подключение…")
+                    Text(if (closing) "Закрываю сессию…" else "Подключение…")
+                }
+                // a command that does not end on Stop: the way out is the user's decision, here as on the Status tab
+                if (closing && session.activity.stuck) {
+                    Text(
+                        "Команда не останавливается. Принудительная остановка может оставить запись на карту незавершённой.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = { vm.restartClient() }) { Text("Принудительно") }
                 }
             }
 
             is Connection.Failed -> {
                 InfoCard("Ошибка", c.reason)
                 Button(onClick = { vm.searchDevice() }) { Text("Повторить") }
+                // the client itself did not start: another try at the device does not help, a new client process may
+                if (session.error.isNotEmpty() && !session.ready) {
+                    OutlinedButton(onClick = { vm.restartClient() }) { Text("Перезапустить клиент") }
+                }
             }
 
             is Connection.Lost -> {
@@ -170,10 +184,10 @@ private fun TransportPicker() {
 }
 
 @Composable
-private fun StateCard(conn: Connection) {
+private fun StateCard(conn: Connection, closing: Boolean) {
     val (title, color) = when (conn) {
         is Connection.Connected -> "Подключено" to MaterialTheme.colorScheme.primary
-        Connection.Connecting -> "Подключение…" to MaterialTheme.colorScheme.secondary
+        Connection.Connecting -> (if (closing) "Закрытие сессии…" else "Подключение…") to MaterialTheme.colorScheme.secondary
         is Connection.Dfu -> "Режим DFU" to activityColorOnSurface(ActivityKind.SNIFFER)
         Connection.Flashing -> "Прошивка…" to MaterialTheme.colorScheme.tertiary
         is Connection.Failed -> "Ошибка" to MaterialTheme.colorScheme.error

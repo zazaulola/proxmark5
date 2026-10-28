@@ -90,6 +90,9 @@ private class FlashError(message: String) : Exception(message)
 // device (30 s at most) a gap between two passes stays under 90 s, inside the service's flash lease (180 s).
 private const val FLASH_USER_WAIT_MS = 60_000L
 
+/** How long a write waits for the client to come up (the first start after an install unpacks its files). */
+private const val CLIENT_START_WAIT_MS = 30_000L
+
 data class ReadState(
     val running: Boolean = false,
     val hf: SearchResult? = null,
@@ -110,9 +113,10 @@ private fun connectionOf(snap: SessionSnapshot, found: Connection, reread: Strin
         LinkState.FLASHING -> Connection.Flashing
         LinkState.LOST -> if (waiting) found else Connection.Lost(snap.linkDetail)
         LinkState.FAILED -> if (waiting) found else Connection.Failed(snap.linkDetail)
-        LinkState.LEFT -> Connection.Left
+        LinkState.LEFT -> if (waiting) found else Connection.Left
         // a client that could not start leaves no session to fail: the reason is in the snapshot
-        LinkState.IDLE -> if (snap.error.isNotEmpty()) Connection.Failed(snap.error) else found
+        // (the permission still has to be asked for; a DFU device is of no use while the client is down)
+        LinkState.IDLE -> if (snap.error.isNotEmpty() && found !is Connection.NeedPermission) Connection.Failed(snap.error) else found
     }
 }
 
@@ -452,7 +456,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // The service owns the device from here to flashEnd. There is no disconnect first: the first
     // flash call closes the session itself, so nothing can reconnect in between.
-    private fun takeDeviceForFlashing() {
+    private suspend fun takeDeviceForFlashing() {
+        // the first start after an install unpacks the client's files: the write waits for it instead of failing
+        if (!session.state.value.ready && session.state.value.error.isEmpty()) {
+            _flash.value = FlashState.Working("Подготовка", "Клиент запускается…")
+            withTimeoutOrNull(CLIENT_START_WAIT_MS) { session.state.first { it.ready || it.error.isNotEmpty() } }
+        }
+        session.state.value.error.takeIf { it.isNotEmpty() }?.let { throw FlashError(it) }
         // the service takes the device over only from an idle client; a command that runs is the user's to stop
         val act = session.state.value.activity
         if (act.running || act.queued > 0) throw FlashError("Сначала остановите команду")
@@ -571,7 +581,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         ResultCode.BUSY -> throw FlashError("Клиент занят: остановите команду и повторите")
-        ResultCode.DROPPED -> throw FlashError("Клиент ещё не запущен, повторите")
+        ResultCode.DROPPED -> throw FlashError(
+            session.state.value.error.ifEmpty { "Клиент запускается, повторите через несколько секунд" },
+        )
         else -> throw FlashError("$what не удалась (код $code), подробности в терминале (панель сверху)")
     }
 

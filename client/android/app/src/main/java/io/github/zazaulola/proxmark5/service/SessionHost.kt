@@ -45,7 +45,7 @@ internal class SessionHost private constructor(private val app: Context) {
     private val log = LogFile(app, epoch)
     private val usb = UsbLink(app)
     private val wakeLock = WakeLockHolder(app)
-    private val notifier = Notifier { owner -> ownerGone(owner) }
+    private val notifier = Notifier({ owner -> ownerGone(owner) }, { post { onListenersGone() } })
     private val engine = ClientEngine(app, log, usb, notifier, changed = { requestSettle() }, idle = { clientIdle() })
     private val control by lazy { ControlThread(engine) { breakAllowed } }
 
@@ -185,7 +185,10 @@ internal class SessionHost private constructor(private val app: Context) {
     private fun onBegin(kind: Int, device: String?) {
         when (kind) {
             Pm3Ipc.KIND_CONNECT -> connect(device)
-            Pm3Ipc.KIND_FLASH -> beginFlash()
+            // The intent only brings the service to the foreground (the shell did that) and keeps a lease that runs. FLASHING itself is
+            // entered by the first flash()/dfuFlash(), which travels the binder that flashEnd travels too: an intent can arrive late,
+            // after its chain ended, and must not be able to open a chain nobody ends.
+            Pm3Ipc.KIND_FLASH -> if (link == LinkState.FLASHING) armLease()
             // KIND_RUN: the commands come with submit, and needsFgs keeps the process for them
         }
         // whatever came of it, the UI that asked gets a fresh look
@@ -535,6 +538,12 @@ internal class SessionHost private constructor(private val app: Context) {
 
     private fun ownerGone(owner: Long) {
         engine.dropOwner(owner)
+    }
+
+    // The last UI died. A flash chain it left between two passes has nobody to make the next pass or to end it, so it is ended here, as
+    // the UI would have; a pass that writes ends the chain itself when it returns (endAsked). A UI that attached again meanwhile keeps it.
+    private fun onListenersGone() {
+        if (flashLease && notifier.listenerCount() == 0) onFlashEnd()
     }
 
     // At most one Stop timer or loss timer is armed; arming one makes the older one void.

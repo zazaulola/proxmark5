@@ -104,11 +104,14 @@ fun TerminalPanel(
 ) {
     val lines by vm.terminal.collectAsStateWithLifecycle()
     val activity by vm.activity.collectAsStateWithLifecycle()
+    val conn by vm.connection.collectAsStateWithLifecycle()
     val now by rememberNow(activity.running)
 
     CompositionLocalProvider(LocalContentColor provides TerminalForeground) {
         Column(modifier.background(TerminalBackground)) {
-            StatusBar(vm, activity, now, lines.lastOrNull { it.isNotBlank() }.orEmpty(), expanded)
+            // nothing may stop a firmware write: no Stop while the flasher owns the device
+            val canStop = activity.running && conn != Connection.Flashing
+            StatusBar(vm, activity, now, lines.lastOrNull { it.isNotBlank() }.orEmpty(), expanded, canStop)
             if (expanded) {
                 LogView(lines, Modifier.weight(1f).fillMaxWidth())
                 CommandInput(vm, onInputFocus)
@@ -129,7 +132,7 @@ private fun statusText(a: Activity, now: Long): String {
 }
 
 @Composable
-private fun StatusBar(vm: AppViewModel, activity: Activity, now: Long, lastLine: String, expanded: Boolean) {
+private fun StatusBar(vm: AppViewModel, activity: Activity, now: Long, lastLine: String, expanded: Boolean, canStop: Boolean) {
     val color = activityColor(activity.kind)
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -164,7 +167,7 @@ private fun StatusBar(vm: AppViewModel, activity: Activity, now: Long, lastLine:
                 )
             }
         }
-        if (activity.running) {
+        if (canStop) {
             IconButton(onClick = { vm.stop() }, modifier = Modifier.size(40.dp)) {
                 Icon(Icons.Filled.Stop, contentDescription = "Остановить", tint = ActivitySnifferColor)
             }

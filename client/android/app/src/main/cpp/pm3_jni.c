@@ -15,19 +15,28 @@
 //-----------------------------------------------------------------------------
 // JNI bridge between the Android app and the client library (LIBPM3).
 //
-// The client prints to stdout: stdout and stderr go to a pipe the app reads.
-// stdin is a pipe too, so that a "\n" written by Abort() ends the command loops
-// that poll kbd_enter_pressed().
+// The client prints to stdout: stdout and stderr go to the session log file, which the
+// service and the app read. stdin is a pipe, so that a "\n" written by nativeAbort() ends the
+// command loops that poll kbd_enter_pressed().
 //-----------------------------------------------------------------------------
+
+// glibc declares pipe2() only under this (the desktop build of the bridge uses glibc)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 
 #include <jni.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include "proxmark3.h"
 #include "cmdmain.h"
@@ -46,15 +55,57 @@
 #define JNI_FN(name) Java_io_github_zazaulola_proxmark5_core_NativeClient_##name
 
 static int g_stdin_wr = -1;
-static int g_stdout_rd = -1;
 
-// Returns the read end of the output pipe, or -1. Only the first call sets things up.
+// stdout and stderr go to the file at log_path, stdin comes from a pipe that nativeAbort() writes to.
+// Returns false, with nothing left open, when any of it fails.
+static bool setup_stdio(const char *log_path) {
+    int log_fd = open(log_path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
+    if (log_fd < 0) {
+        return false;
+    }
+    int in[2];
+    if (pipe2(in, O_CLOEXEC) != 0) {
+        close(log_fd);
+        return false;
+    }
+    // Only the write end is non-blocking, so an abort can never stall its caller. The read end stays
+    // blocking: the client reads it with fgets() at its prompts. kbd_enter_pressed() makes it
+    // non-blocking for a moment and puts it back, which leaves the write end alone (another file description).
+    int flags = fcntl(in[1], F_GETFL);
+    bool ok = flags >= 0 && fcntl(in[1], F_SETFL, flags | O_NONBLOCK) == 0;
+    if (ok) {
+        fflush(stdout);
+        fflush(stderr);
+        ok = dup2(log_fd, STDOUT_FILENO) >= 0 && dup2(log_fd, STDERR_FILENO) >= 0 && dup2(in[0], STDIN_FILENO) >= 0;
+        // kbd_enter_pressed() fails, and complains, when it can't read the flags of stdin
+        ok = ok && fcntl(STDIN_FILENO, F_GETFL) >= 0;
+    }
+    if (log_fd > STDERR_FILENO) {
+        close(log_fd);
+    }
+    if (in[0] > STDERR_FILENO) {
+        close(in[0]);
+    }
+    if (ok) {
+        g_stdin_wr = in[1];
+    } else {
+        close(in[1]);
+    }
+    return ok;
+}
+
+// Returns 0, or -1 when something failed. Only the first successful call sets things up.
 // home: $HOME, where resources (dictionaries, scripts) are unpacked and read from.
 // dumpdir: where saved dumps go (an app directory a file manager can reach); "" keeps HOME.
-JNIEXPORT jint JNICALL JNI_FN(nativeInit)(JNIEnv *env, jclass clazz, jstring jhome, jstring jdump) {
+// logpath: the file the client's stdout and stderr are appended to.
+JNIEXPORT jint JNICALL JNI_FN(nativeInit)(JNIEnv *env, jclass clazz, jstring jhome, jstring jdump, jstring jlog) {
     (void) clazz;
-    if (g_stdout_rd >= 0) {
-        return g_stdout_rd;
+    // Before anything can print (pm3_init and preferences_* may). The client would otherwise append all it
+    // prints to a log file under $HOME/.proxmark3/logs, opened at the first line, without rotation: on a
+    // phone that grows for ever, and the session log is the app's own.
+    g_printAndLog &= (uint8_t) ~PRINTANDLOG_LOG;
+    if (g_stdin_wr >= 0) {
+        return 0;
     }
 
     const char *home = (*env)->GetStringUTFChars(env, jhome, NULL);
@@ -69,29 +120,19 @@ JNIEXPORT jint JNICALL JNI_FN(nativeInit)(JNIEnv *env, jclass clazz, jstring jho
         return -1;
     }
 
-    int out[2], in[2];
-    if (pipe(out) != 0) {
+    const char *log_path = (*env)->GetStringUTFChars(env, jlog, NULL);
+    if (log_path == NULL) {
         return -1;
     }
-    // A big stdout pipe so a burst of client output can't block the command thread (which
-    // also drives the device) faster than the app drains it. Best effort: ignore failure.
-    fcntl(out[1], F_SETPIPE_SZ, 1 << 20);
-    if (pipe(in) != 0) {
-        close(out[0]);
-        close(out[1]);
+    bool stdio_ok = setup_stdio(log_path);
+    (*env)->ReleaseStringUTFChars(env, jlog, log_path);
+    if (!stdio_ok) {
         return -1;
     }
-    fflush(stdout);
-    fflush(stderr);
-    dup2(out[1], STDOUT_FILENO);
-    dup2(out[1], STDERR_FILENO);
-    close(out[1]);
-    dup2(in[0], STDIN_FILENO);
-    close(in[0]);
+    // a write to a socket or pipe nobody reads must fail with EPIPE, not kill the process
+    signal(SIGPIPE, SIG_IGN);
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
-    g_stdin_wr = in[1];
-    g_stdout_rd = out[0];
 
     pm3_init();
     preferences_load();
@@ -115,7 +156,7 @@ JNIEXPORT jint JNICALL JNI_FN(nativeInit)(JNIEnv *env, jclass clazz, jstring jho
             (*env)->ReleaseStringUTFChars(env, jdump, dump);
         }
     }
-    return g_stdout_rd;
+    return 0;
 }
 
 // port: e.g. "usb:12" for a usbfs descriptor the app opened. Returns true when connected.
@@ -142,9 +183,12 @@ JNIEXPORT void JNICALL JNI_FN(nativeClose)(JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
     if (g_session.pm3_present) {
-        clearCommandBuffer();
-        SendCommandNG(CMD_QUIT_SESSION, NULL, 0);
-        msleep(100);
+        // With the communication thread gone nothing would send the command, and the pause is for it to get out
+        if (!IsCommunicationThreadDead() && !IsCommunicationThreadExited()) {
+            clearCommandBuffer();
+            SendCommandNG(CMD_QUIT_SESSION, NULL, 0);
+            msleep(100);
+        }
         CloseProxmark(g_session.current_device);
     }
 }
@@ -155,16 +199,47 @@ JNIEXPORT jboolean JNICALL JNI_FN(nativeIsConnected)(JNIEnv *env, jclass clazz) 
     return g_session.pm3_present ? JNI_TRUE : JNI_FALSE;
 }
 
+// State of the link without taking any lock, so any thread may ask while a command runs:
+// 0 no device, 1 connected, 2 the device is gone. pm3_present stays set until nativeClose, but the
+// communication thread has ended on its own, because it saw the port fail: nothing more reaches the
+// device. That shows as the dead flag, and as the thread having exited while g_conn.run is still set
+// (CloseProxmark() clears it before the thread ends, so a normal close is not taken for a loss).
+JNIEXPORT jint JNICALL JNI_FN(nativeLinkState)(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    if (!__atomic_load_n(&g_session.pm3_present, __ATOMIC_SEQ_CST)) {
+        return 0;
+    }
+    if (IsCommunicationThreadDead() ||
+            (IsCommunicationThreadExited() && __atomic_load_n(&g_conn.run, __ATOMIC_SEQ_CST))) {
+        return 2;
+    }
+    return 1;
+}
+
+// Asks the device to leave the loop it is in (CMD_BREAK_LOOP), like `hw break`. Meant to be
+// called from another thread than the one running the command: commands that wait on the device
+// without looking at the keyboard (most sim and sniff commands) only end this way. Does nothing
+// when there is no live link, and never waits for one that is dead. It may wait for the USB write.
+// Not while flashing: the bootloader only knows OLD frames, and the flasher matches each ACK to the last
+// command sent.
+JNIEXPORT void JNICALL JNI_FN(nativeBreak)(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    if (__atomic_load_n(&g_session.pm3_present, __ATOMIC_SEQ_CST) && !IsCommunicationThreadDead() &&
+            !__atomic_load_n(&g_conn.block_after_ACK, __ATOMIC_SEQ_CST)) {
+        SendCommandNG(CMD_BREAK_LOOP, NULL, 0);
+    }
+}
+
 // Runs one client command line. With grab, its output is also kept for nativeTakeGrabbed().
+// An Enter that is already waiting on stdin ends the command at once: the caller runs nativeDrainStdin() first.
 JNIEXPORT jint JNICALL JNI_FN(nativeExec)(JNIEnv *env, jclass clazz, jstring jcmd, jboolean grab) {
     (void) clazz;
     const char *cmd = (*env)->GetStringUTFChars(env, jcmd, NULL);
     if (cmd == NULL) {
         return PM3_EMALLOC;
     }
-    // drop a stale Abort() that came after the previous command ended
-    kbd_enter_pressed();
-
     uint8_t prev = g_printAndLog;
     if (grab) {
         g_printAndLog |= PRINTANDLOG_GRAB;
@@ -275,14 +350,28 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(nativeCommandTree)(JNIEnv *env, jclass clazz
     return arr;
 }
 
-// Same as pressing Enter in the console: ends loops that wait for it.
+// Same as pressing Enter in the console: ends loops that wait for it. The write end is
+// non-blocking, so this can be called from any thread.
 JNIEXPORT void JNICALL JNI_FN(nativeAbort)(JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
     if (g_stdin_wr >= 0) {
         if (write(g_stdin_wr, "\n", 1) != 1) {
-            // pipe full: an abort is already pending
+            // EAGAIN, the pipe is full: an Enter is already waiting, which is all an abort needs
         }
+    }
+}
+
+// Throws away the Enters that were written and not read, such as an abort that came after the command
+// it was meant for had ended. Runs on the client thread, right before nativeExec.
+JNIEXPORT void JNICALL JNI_FN(nativeDrainStdin)(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    // kbd_enter_pressed() reads everything there is and returns 1 if it saw a newline, or -1 when it can't
+    // set the mode of stdin; it leaves stdin blocking. Ask again until a pass finds nothing: an Enter may
+    // have come in while it was reading.
+    while (kbd_enter_pressed() > 0) {
+        // drop it
     }
 }
 
@@ -378,4 +467,17 @@ JNIEXPORT jint JNICALL JNI_FN(nativeDfuFlash)(JNIEnv *env, jclass clazz, jstring
     (*env)->ReleaseStringUTFChars(env, jfile, file);
     (*env)->ReleaseStringUTFChars(env, jport, port);
     return ret;
+}
+
+// Every exit() in the client library ends up here (-Wl,--wrap=exit, see CMakeLists.txt). A real exit() runs
+// the atexit handlers and the static destructors while other threads, hardnested's workers for one, still use
+// what is being destroyed, so how the process dies would depend on timing. Flush what the client printed
+// (the app shows it after the process is gone), say so in logcat and leave at once. Never returns, as
+// exit() does not: the callers were compiled to expect that.
+void __wrap_exit(int status) {
+    fflush(NULL);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_FATAL, "pm3", "the client called exit(%d)", status);
+#endif
+    _exit(status);
 }

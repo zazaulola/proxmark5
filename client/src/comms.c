@@ -744,6 +744,12 @@ bool IsCommunicationThreadDead(void) {
     return ret;
 }
 
+// True once the communication thread's loop has ended, whatever the reason; with g_conn.run still set
+// that was not CloseProxmark() asking for it.
+bool IsCommunicationThreadExited(void) {
+    return __atomic_load_n(&comm_thread_exited, __ATOMIC_SEQ_CST);
+}
+
 
 
 // To start raw receive mode:
@@ -817,9 +823,10 @@ bool OpenProxmarkSilent(pm3_device_t **dev, const char *port, uint32_t speed) {
         txBufferNGLen = 0;
         __atomic_store_n(&comm_thread_exited, false, __ATOMIC_SEQ_CST);
         pthread_mutex_unlock(&txBufferMutex);
+        // before the thread exists: one that fails at once sets this flag, and clearing it afterwards would erase that
+        __atomic_clear(&comm_thread_dead, __ATOMIC_SEQ_CST);
 
         pthread_create(&communication_thread, NULL, &uart_communication, &g_conn);
-        __atomic_clear(&comm_thread_dead, __ATOMIC_SEQ_CST);
         __atomic_clear(&reconnect_ok, __ATOMIC_SEQ_CST);
 
         g_session.pm3_present = true; // TODO support for multiple devices
@@ -891,9 +898,10 @@ bool OpenProxmark(pm3_device_t **dev, const char *port, bool wait_for_port, int 
         txBufferNGLen = 0;
         __atomic_store_n(&comm_thread_exited, false, __ATOMIC_SEQ_CST);
         pthread_mutex_unlock(&txBufferMutex);
+        // before the thread exists: one that fails at once sets this flag, and clearing it afterwards would erase that
+        __atomic_clear(&comm_thread_dead, __ATOMIC_SEQ_CST);
 
         pthread_create(&communication_thread, NULL, &uart_communication, &g_conn);
-        __atomic_clear(&comm_thread_dead, __ATOMIC_SEQ_CST);
         g_session.pm3_present = true; // TODO support for multiple devices
 
         fflush(stdout);

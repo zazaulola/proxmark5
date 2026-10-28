@@ -49,6 +49,9 @@ target_include_directories(pm3jni PRIVATE
         ${PM3_ROOT}/client/deps/jansson
 )
 target_link_libraries(pm3jni PRIVATE pm3rrg_rdv4_static)
+# Every exit() in the client library, which is linked in as a static archive, becomes a call to
+# __wrap_exit() of pm3_jni.c: the process must not run exit handlers under running threads
+target_link_options(pm3jni PRIVATE -Wl,--wrap=exit)
 
 if (ANDROID)
     target_link_libraries(pm3jni PRIVATE log)

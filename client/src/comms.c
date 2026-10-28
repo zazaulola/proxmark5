@@ -47,6 +47,9 @@ static pthread_t reconnect_thread;
 static bool reconnect_ok = false;
 
 static bool comm_thread_dead = false;
+// Set when the communication thread's loop has ended for any reason (device unplugged or reset,
+// port closed). Nothing takes a queued command after that, so senders must not wait for it.
+static bool comm_thread_exited = false;
 static bool comm_raw_mode = false;
 static uint8_t *comm_raw_data = NULL;
 static size_t comm_raw_len = 0;
@@ -106,6 +109,17 @@ bool WaitForTxIdle(uint32_t ms_timeout) {
     }
 }
 
+// Waits until the communication thread has taken the previous command; call with txBufferMutex held.
+// Returns false if that thread is gone: with the device unplugged nobody clears txBuffer_pending any
+// more, and waiting for it would hang the caller for good.
+static bool wait_for_tx_slot(void) {
+    while (txBuffer_pending && !__atomic_load_n(&comm_thread_exited, __ATOMIC_SEQ_CST)) {
+        // wait for communication thread to complete sending a previous command
+        pthread_cond_wait(&txBufferSig, &txBufferMutex);
+    }
+    return !__atomic_load_n(&comm_thread_exited, __ATOMIC_SEQ_CST);
+}
+
 // Simple alias to track usages linked to the Bootloader, these commands must not be migrated.
 // - commands sent to enter bootloader mode as we might have to talk to old firmwares
 // - commands sent to the bootloader as it only supports OLD frames (which will always be the case for old BL)
@@ -147,13 +161,12 @@ void SendCommandOLD(uint64_t cmd, uint64_t arg0, uint64_t arg1, uint64_t arg2, c
     }
 
     pthread_mutex_lock(&txBufferMutex);
-    /**
-    This causes hangups at times, when the pm3 unit is unresponsive or disconnected. The main console thread is alive,
-    but comm thread just spins here. Not good.../holiman
-    **/
-    while (txBuffer_pending) {
-        // wait for communication thread to complete sending a previous command
-        pthread_cond_wait(&txBufferSig, &txBufferMutex);
+    // This used to hang when the pm3 unit was unresponsive or disconnected: the main console
+    // thread was alive, but nothing was left to take the queued command. See wait_for_tx_slot().
+    if (wait_for_tx_slot() == false) {
+        pthread_mutex_unlock(&txBufferMutex);
+        PrintAndLogEx(WARNING, "Sending bytes to Proxmark3 failed ( " _RED_("disconnected") " )");
+        return;
     }
 
     txBuffer = c;
@@ -189,13 +202,12 @@ void SendCommandNG(uint16_t cmd, uint8_t *data, size_t len) {
     PacketCommandNGPostamble *tx_post = (PacketCommandNGPostamble *)((uint8_t *)&txBufferNG + sizeof(PacketCommandNGPreamble) + len);
 
     pthread_mutex_lock(&txBufferMutex);
-    /**
-    This causes hangups at times, when the pm3 unit is unresponsive or disconnected. The main console thread is alive,
-    but comm thread just spins here. Not good.../holiman
-    **/
-    while (txBuffer_pending) {
-        // wait for communication thread to complete sending a previous command
-        pthread_cond_wait(&txBufferSig, &txBufferMutex);
+    // This used to hang when the pm3 unit was unresponsive or disconnected: the main console
+    // thread was alive, but nothing was left to take the queued command. See wait_for_tx_slot().
+    if (wait_for_tx_slot() == false) {
+        pthread_mutex_unlock(&txBufferMutex);
+        PrintAndLogEx(WARNING, "Sending bytes to Proxmark3 failed ( " _RED_("disconnected") " )");
+        return;
     }
 
     txBufferNG.pre.magic = COMMANDNG_PREAMBLE_MAGIC;
@@ -706,6 +718,15 @@ __attribute__((force_align_arg_pointer))
         pthread_mutex_unlock(&txBufferMutex);
     }
 
+    // Nobody is left to send what a caller queued last, and a caller may be waiting for the slot:
+    // let it go instead of hanging it for good.
+    pthread_mutex_lock(&txBufferMutex);
+    __atomic_store_n(&comm_thread_exited, true, __ATOMIC_SEQ_CST);
+    txBuffer_pending = false;
+    txBufferNGLen = 0;
+    pthread_cond_broadcast(&txBufferSig);
+    pthread_mutex_unlock(&txBufferMutex);
+
     // when thread dies, we close the serial port.
     uart_close(sp);
     sp = NULL;
@@ -790,6 +811,13 @@ bool OpenProxmarkSilent(pm3_device_t **dev, const char *port, uint32_t speed) {
         // "Session" flag, to tell via which interface next msgs should be sent: USB or FPC USART
         g_conn.send_via_fpc_usart = false;
 
+        // a new connection starts with an empty send slot and a live thread
+        pthread_mutex_lock(&txBufferMutex);
+        txBuffer_pending = false;
+        txBufferNGLen = 0;
+        __atomic_store_n(&comm_thread_exited, false, __ATOMIC_SEQ_CST);
+        pthread_mutex_unlock(&txBufferMutex);
+
         pthread_create(&communication_thread, NULL, &uart_communication, &g_conn);
         __atomic_clear(&comm_thread_dead, __ATOMIC_SEQ_CST);
         __atomic_clear(&reconnect_ok, __ATOMIC_SEQ_CST);
@@ -856,6 +884,13 @@ bool OpenProxmark(pm3_device_t **dev, const char *port, bool wait_for_port, int 
         g_conn.send_with_crc_on_fpc = true;
         // "Session" flag, to tell via which interface next msgs should be sent: USB or FPC USART
         g_conn.send_via_fpc_usart = false;
+
+        // a new connection starts with an empty send slot and a live thread
+        pthread_mutex_lock(&txBufferMutex);
+        txBuffer_pending = false;
+        txBufferNGLen = 0;
+        __atomic_store_n(&comm_thread_exited, false, __ATOMIC_SEQ_CST);
+        pthread_mutex_unlock(&txBufferMutex);
 
         pthread_create(&communication_thread, NULL, &uart_communication, &g_conn);
         __atomic_clear(&comm_thread_dead, __ATOMIC_SEQ_CST);

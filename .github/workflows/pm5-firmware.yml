@@ -56,7 +56,7 @@ jobs:
           git log -1 --format='%H %cd' > out/VERSION.txt
           (cd out && sha256sum * > SHA256SUMS)
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: proxmark5-firmware-${{ matrix.name }}
           path: out/

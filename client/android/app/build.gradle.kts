@@ -55,6 +55,8 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // IPm3Service / IPm3Listener, the binder interfaces between the UI and the service process
+        aidl = true
     }
 
     // client resources (dictionaries, lua, json) staged into assets, see stageClientResources,
@@ -100,16 +102,19 @@ dependencies {
 
 // Copy the subset of client/{resources,dictionaries,...} we ship into the APK.
 // $HOME/.proxmark3/<subdir> is the first place the client looks (fileutils.c),
-// so ClientApp unpacks assets/pm3/<subdir> there on first run.
+// so ResourceUnpacker (run by the service process) unpacks assets/pm3/<subdir> there on first run.
 val stageClientResources by tasks.registering(Sync::class) {
-    val clientRoot = rootDir.resolve("../..") // .../client
+    val clientRoot = rootDir.resolve("..") // rootDir is client/android
     into(layout.buildDirectory.dir("pm3-assets/pm3"))
     from(clientRoot.resolve("resources")) {
         into("resources")
         // Ship the hardnested bitflip tables (~9 MB, already lz4-compressed): `hf mf
-        // hardnested` and `hf mf autopwn` on a hardened card need them, and the client
-        // calls exit() if a table is missing — which would kill the whole app. Skip only
-        // the benchmark data, which real cracking never reads.
+        // hardnested` and `hf mf autopwn` on a hardened card use them to narrow the search.
+        // The client skips a table file that is missing without a word (cmdhfmfhard.c,
+        // init_bitflip_bitarrays), so the attack would just run without that narrowing; it
+        // exit()s, which kills the client's process, only on a file that is cut short or damaged
+        // (hence ResourceUnpacker's temporary names). Skip only the benchmark data, which real
+        // cracking never reads.
         exclude("hardnested_bf_bench_data.bin")
     }
     from(clientRoot.resolve("dictionaries")) {

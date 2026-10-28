@@ -1,30 +1,57 @@
 package io.github.zazaulola.proxmark5.ui
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import io.github.zazaulola.proxmark5.core.ClientController
+import io.github.zazaulola.proxmark5.core.Activity
 import io.github.zazaulola.proxmark5.core.ExecResult
+import io.github.zazaulola.proxmark5.core.LibraryRepository
 import io.github.zazaulola.proxmark5.core.NativeClient
 import io.github.zazaulola.proxmark5.firmware.FirmwareChoice
 import io.github.zazaulola.proxmark5.firmware.FirmwareController
+import io.github.zazaulola.proxmark5.ipc.Pm3Ipc
+import io.github.zazaulola.proxmark5.parse.Ansi
 import io.github.zazaulola.proxmark5.parse.Band
 import io.github.zazaulola.proxmark5.parse.CardSearch
+import io.github.zazaulola.proxmark5.parse.CommandNode
 import io.github.zazaulola.proxmark5.parse.FlashLog
 import io.github.zazaulola.proxmark5.parse.HwVersion
 import io.github.zazaulola.proxmark5.parse.SearchResult
+import io.github.zazaulola.proxmark5.remote.Pm3Session
+import io.github.zazaulola.proxmark5.remote.SessionEvent
+import io.github.zazaulola.proxmark5.session.IpcLimits
+import io.github.zazaulola.proxmark5.session.LinkState
+import io.github.zazaulola.proxmark5.session.ResultCode
+import io.github.zazaulola.proxmark5.session.SessionSnapshot
 import io.github.zazaulola.proxmark5.usb.Pm3Ids
-import io.github.zazaulola.proxmark5.usb.UsbSession
 import io.github.zazaulola.proxmark5.usb.UsbTransport
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 
 sealed interface Connection {
     data object NoDevice : Connection
@@ -33,6 +60,12 @@ sealed interface Connection {
     data class Connected(val version: HwVersion?) : Connection
     data class Dfu(val device: UsbDevice) : Connection
     data class Failed(val reason: String) : Connection
+
+    /** The session was cut off (cable pulled, device reset); plugging it in again starts a new one. */
+    data class Lost(val reason: String) : Connection
+
+    /** The user left the session by hand: nothing reconnects until they ask or plug the cable in again. */
+    data object Left : Connection
 
     /** The flasher owns the device: no auto-connect until it is done. */
     data object Flashing : Connection
@@ -53,19 +86,67 @@ data class FlashOptions(val includeBootrom: Boolean = false, val force: Boolean 
 
 private class FlashError(message: String) : Exception(message)
 
+// The longest the firmware chain waits for the user (the USB permission dialog). With the wait for the bootloader
+// device (30 s at most) a gap between two passes stays under 90 s, inside the service's flash lease (180 s).
+private const val FLASH_USER_WAIT_MS = 60_000L
+
+/** How long a write waits for the client to come up (the first start after an install unpacks its files). */
+private const val CLIENT_START_WAIT_MS = 30_000L
+
 data class ReadState(
     val running: Boolean = false,
     val hf: SearchResult? = null,
     val lf: SearchResult? = null,
 )
 
-class AppViewModel(app: Application) : AndroidViewModel(app) {
-    private val client = ClientController.get(app)
-    private val usb = UsbTransport(app)
-    private var session: UsbSession? = null
+/**
+ * The connection the screens show: what the service says about its session, and while it has none
+ * ([LinkState.IDLE]) what looking at the USB bus found ([found]).
+ */
+private fun connectionOf(snap: SessionSnapshot, found: Connection, reread: String?, writing: Boolean): Connection {
+    if (writing) return Connection.Flashing
+    // a device that waits for the user (a permission, DFU mode) is news even after a session ended badly
+    val waiting = found is Connection.NeedPermission || found is Connection.Dfu
+    return when (snap.link) {
+        LinkState.CONNECTED -> Connection.Connected((reread ?: snap.info).takeIf { it.isNotBlank() }?.let { HwVersion.parse(it) })
+        LinkState.OPENING, LinkState.CLOSING -> Connection.Connecting
+        LinkState.FLASHING -> Connection.Flashing
+        LinkState.LOST -> if (waiting) found else Connection.Lost(snap.linkDetail)
+        LinkState.FAILED -> if (waiting) found else Connection.Failed(snap.linkDetail)
+        LinkState.LEFT -> if (waiting) found else Connection.Left
+        // a client that could not start leaves no session to fail: the reason is in the snapshot
+        // (the permission still has to be asked for; a DFU device is of no use while the client is down)
+        LinkState.IDLE -> if (snap.error.isNotEmpty() && found !is Connection.NeedPermission) Connection.Failed(snap.error) else found
+    }
+}
 
-    private val _connection = MutableStateFlow<Connection>(Connection.NoDevice)
-    val connection: StateFlow<Connection> = _connection.asStateFlow()
+class AppViewModel(app: Application) : AndroidViewModel(app) {
+    // The session lives in the service process and outlives this ViewModel: this only watches and steers it.
+    private val session = Pm3Session.get(app)
+    private val usb = UsbTransport(app)
+
+    // what the last look at the USB bus found (NoDevice, NeedPermission, Dfu); shown while the service has no session
+    private val discovery = MutableStateFlow<Connection>(Connection.NoDevice)
+
+    // `hw version` read again by hand, for the session that is open now
+    private val reread = MutableStateFlow<String?>(null)
+
+    // this ViewModel's firmware chain (download, waiting for the bootloader, write) is under way
+    private val flashing = MutableStateFlow(false)
+
+    // a write was cut short by the death of the client: no auto-connect until the user acts
+    private var noAutoConnect = false
+
+    /** What the service says about the session: link, client, the running command. */
+    val sessionState: StateFlow<SessionSnapshot> = session.state
+
+    val connection: StateFlow<Connection> =
+        combine(session.state, discovery, reread, flashing) { snap, found, text, writing ->
+            connectionOf(snap, found, text, writing)
+        }.stateIn(
+            viewModelScope, SharingStarted.Eagerly,
+            connectionOf(session.state.value, discovery.value, reread.value, flashing.value),
+        )
 
     private val _read = MutableStateFlow(ReadState())
     val read: StateFlow<ReadState> = _read.asStateFlow()
@@ -73,13 +154,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _terminal = MutableStateFlow<List<String>>(emptyList())
     val terminal: StateFlow<List<String>> = _terminal.asStateFlow()
 
-    private val _busy = MutableStateFlow(false)
-    val busy: StateFlow<Boolean> = _busy.asStateFlow()
+    /** What the session is doing: idle, a command with its progress, a sniffer or an emulation. */
+    val activity: StateFlow<Activity> = session.state.map { it.activity }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, session.state.value.activity)
 
-    val clientVersion get() = client.clientVersion
+    /** True while a command runs, the device is being connected or a firmware is being written. */
+    val busy: StateFlow<Boolean> = combine(activity, connection) { a, c ->
+        a.running || c is Connection.Connecting || c is Connection.Flashing
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private val _commandTree = MutableStateFlow<CommandNode?>(null)
+
+    /** The client's commands, for the Functions section. Null until the client has started. */
+    val commandTree: StateFlow<CommandNode?> = _commandTree.asStateFlow()
+    private var treeJob: Job? = null
+
+    /** The saved dumps, keys and logs. */
+    val library = LibraryRepository(File(session.dumpDir), File(session.logsDir))
+
+    /** True once the client has started and [clientVersion] / [clientArmSrc] are filled in. */
+    val clientReady: StateFlow<Boolean> = session.state.map { it.ready }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, session.state.value.ready)
+
+    val clientVersion: String get() = session.state.value.clientVersion
 
     /** ARM source hash of the embedded client: a firmware with the same one matches it. */
-    val clientArmSrc get() = client.clientArmSrc
+    val clientArmSrc: String get() = session.state.value.clientArmSrc
 
     /** Firmware catalog, builds on GitHub Actions and downloads. */
     val firmware = FirmwareController(app, viewModelScope)
@@ -87,26 +187,68 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _flash = MutableStateFlow<FlashState>(FlashState.Idle)
     val flash: StateFlow<FlashState> = _flash.asStateFlow()
 
-    @Volatile
-    private var flashing = false
     private var flashJob: Job? = null
 
-    /** Where saved dumps land (shown on the read screen). */
-    val dumpDir get() = client.dumpDir
+    /** Where saved dumps land. */
+    val dumpDir: String get() = session.dumpDir
+
+    /** Where saved terminal logs land. */
+    val logsDir: String get() = session.logsDir
+
+    // the cable pulled while no session is open: look again (an open session is the service's to end)
+    private val detachReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context, intent: Intent) {
+            if (intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED && !flashing.value) look()
+        }
+    }
 
     init {
-        viewModelScope.launch { client.ensureStarted() }
+        session.start()
+        ContextCompat.registerReceiver(
+            app, detachReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         startTerminalTicker()
-        refreshDevice()
+        // which commands exist depends on the device, so look again when it comes and goes (and once the client is up)
+        viewModelScope.launch {
+            combine(connection.map { it is Connection.Connected }, clientReady) { connected, ready -> connected to ready }
+                .distinctUntilChanged().collect { refreshCommandTree() }
+        }
+        // a version read by hand belongs to the session it was read in
+        viewModelScope.launch {
+            session.state.map { it.link == LinkState.CONNECTED }.distinctUntilChanged().collect { reread.value = null }
+        }
+        // the service restarted the client on purpose (a Stop it could not do otherwise): connect again
+        viewModelScope.launch {
+            // SessionEvent.ServiceDied needs nothing here: the session has already published Lost
+            session.events.collect { if (it is SessionEvent.ReconnectAfterRestart) reconnectAfterRestart() }
+        }
+        // connecting waits for MainActivity: only a visible app may start the service
+        look()
+    }
+
+    override fun onCleared() {
+        runCatching { getApplication<Application>().unregisterReceiver(detachReceiver) }
+        // The session is the service's: it keeps running (a command, a sniffer, the link) when the
+        // screen goes away, and a new ViewModel picks it up. Only Stop and leaving end it.
+        super.onCleared()
+    }
+
+    private fun refreshCommandTree() {
+        treeJob?.cancel()
+        treeJob = viewModelScope.launch {
+            val tree = runCatching { session.commandTree() }.getOrNull()
+            if (tree != null) _commandTree.value = tree
+        }
     }
 
     private fun startTerminalTicker() = viewModelScope.launch {
         var seen = -1L
         while (isActive) {
-            val rev = client.terminal.revision
+            val rev = session.terminal.revision
             if (rev != seen) {
                 seen = rev
-                _terminal.value = client.terminal.snapshot()
+                _terminal.value = session.terminal.snapshot()
             }
             delay(120)
         }
@@ -114,89 +256,154 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Looks for a plugged-in Proxmark and reflects what it finds. */
     fun refreshDevice() {
-        if (flashing) return
-        val cur = _connection.value
-        if (cur is Connection.Connected || cur is Connection.Connecting) return
-        val device = usb.findProxmark()
-        _connection.value = when {
-            device == null -> Connection.NoDevice
-            !usb.hasPermission(device) -> Connection.NeedPermission(device)
-            usb.isDfuDevice(device) -> Connection.Dfu(device)
-            else -> cur.takeIf { it is Connection.Connected } ?: Connection.NoDevice
-        }
-        if (device != null && usb.hasPermission(device) && !usb.isDfuDevice(device)) {
-            connect(device)
+        viewModelScope.launch {
+            // On a cold start the service's state is not known yet: a session left by hand (or one that is
+            // open) must not be taken for none.
+            withTimeoutOrNull(3_000) { session.state.first { it.epoch != 0L || it.link != LinkState.IDLE } }
+            findAndConnect(byUser = false)
         }
     }
 
+    /** The "look for the device" buttons: an explicit ask also ends the "left by hand" state. */
+    fun searchDevice() {
+        findAndConnect(byUser = true)
+    }
+
     fun onDeviceAttached(device: UsbDevice) {
-        if (flashing) return
-        if (usb.hasPermission(device)) refreshDevice() else requestPermission(device)
+        if (flashing.value) return
+        if (usb.hasPermission(device)) findAndConnect(byUser = true) else requestPermission(device)
     }
 
     fun requestPermission(device: UsbDevice) = viewModelScope.launch {
         val granted = usb.requestPermission(device)
-        if (flashing) return@launch
-        if (granted != null) refreshDevice() else _connection.value = Connection.NeedPermission(device)
+        if (flashing.value) return@launch
+        if (granted != null) findAndConnect(byUser = true) else discovery.value = Connection.NeedPermission(device)
     }
 
-    private fun connect(device: UsbDevice) = viewModelScope.launch {
-        _connection.value = Connection.Connecting
-        val s = usb.open(device)
-        if (s == null) {
-            _connection.value = Connection.Failed("Не удалось открыть USB-устройство")
-            return@launch
+    /**
+     * Looks at the USB bus and, when no session is in the way, asks the service to connect to what it
+     * finds. True when it asked. A refusal (Android said no) comes back as link FAILED in the session's state.
+     */
+    private fun findAndConnect(byUser: Boolean): Boolean {
+        if (flashing.value) return false
+        if (byUser) noAutoConnect = false
+        val link = session.state.value.link
+        // an open, opening or closing session and a firmware write are not touched
+        if (link.holdsService) return false
+        val device = look()
+        // a session the user left by hand and a write that broke off are not resumed unasked
+        val resume = byUser || (link != LinkState.LEFT && !noAutoConnect)
+        return device != null && resume && session.begin(Pm3Ipc.KIND_CONNECT, device.deviceName)
+    }
+
+    /** Reflects what is on the USB bus; returns the device a session can be opened to right now, if any. */
+    private fun look(): UsbDevice? {
+        val device = usb.findProxmark()
+        discovery.value = when {
+            device == null -> Connection.NoDevice
+            !usb.hasPermission(device) -> Connection.NeedPermission(device)
+            usb.isDfuDevice(device) -> Connection.Dfu(device)
+            else -> Connection.NoDevice
         }
-        session = s
-        val ok = runGuarded { client.connect(s.port) }
-        if (ok != true) {
-            s.close()
-            session = null
-            _connection.value = Connection.Failed("Устройство не отвечает")
-            return@launch
+        return device?.takeIf { usb.hasPermission(it) && !usb.isDfuDevice(it) }
+    }
+
+    private fun reconnectAfterRestart() {
+        // the user left in the meantime: a restart is no reason to come back
+        if (session.state.value.link == LinkState.LEFT) return
+        if (!findAndConnect(byUser = false)) return
+        // the note goes to the new service, which has to be there first (a call with no service is dropped)
+        viewModelScope.launch {
+            withTimeoutOrNull(5_000) { session.bound.first { it } }
+            session.note("клиент перезапущен, подключаюсь заново")
         }
-        _connection.value = Connection.Connected(null)
-        loadVersion()
     }
 
-    private suspend fun loadVersion() {
-        val res = runGuarded { client.exec("hw version") } ?: return
-        _connection.value = Connection.Connected(HwVersion.parse(res.grabbed))
-    }
-
+    /** Reads `hw version` again; the service read it once when the session opened. */
     fun refreshVersion() = viewModelScope.launch {
-        if (_connection.value is Connection.Connected) loadVersion()
+        if (connection.value !is Connection.Connected) return@launch
+        val stops = session.generation
+        val res = submit("hw version", grab = true).await()
+        // the session may have ended while the command waited its turn
+        if (!cutShort(res, stops) && connection.value is Connection.Connected) reread.value = res.grabbed
     }
 
-    fun disconnect() = viewModelScope.launch {
-        runGuarded { client.disconnect() }
-        session?.close()
-        session = null
-        _connection.value = Connection.NoDevice
-        refreshDevice()
-    }
+    /** Leaves the session by hand: the service ends what runs, drops what waits and closes the link. */
+    fun disconnect() = session.disconnect()
 
-    /** Runs `hf search` then `lf search`, parsing each into the read screen. */
+    /** "Restart the client": ends the client's process for a command that does not stop. Not while flashing. */
+    fun restartClient() = session.restartClient("по просьбе пользователя")
+
+    /** Runs `hf search` then `lf search`, parsing each into the card-search panel. */
     fun detectCard() = viewModelScope.launch {
-        if (_busy.value) return@launch
+        if (_read.value.running) return@launch
         _read.value = ReadState(running = true)
-        val hf = runGuarded { client.exec("hf search") }
-        _read.value = _read.value.copy(hf = hf?.let { CardSearch.parse(it.grabbed, Band.HF) })
-        val lf = runGuarded { client.exec("lf search") }
-        _read.value = ReadState(running = false, hf = _read.value.hf, lf = lf?.let { CardSearch.parse(it.grabbed, Band.LF) })
+        val stops = session.generation
+        val hf = submit("hf search", grab = true).await()
+        // Stop, leaving the session, a pulled cable or a dead client cut the search short: no result, no next command
+        if (cutShort(hf, stops)) {
+            _read.value = ReadState()
+            return@launch
+        }
+        _read.value = _read.value.copy(hf = CardSearch.parse(hf.grabbed, Band.HF))
+        val lf = submit("lf search", grab = true).await()
+        if (cutShort(lf, stops)) {
+            _read.value = ReadState(hf = _read.value.hf)
+            return@launch
+        }
+        _read.value = ReadState(running = false, hf = _read.value.hf, lf = CardSearch.parse(lf.grabbed, Band.LF))
     }
 
-    fun runCommand(cmd: String) = viewModelScope.launch {
-        if (cmd.isBlank()) return@launch
-        runGuarded { client.exec(cmd.trim(), grab = false) }
+    /** Sends a command line to the living session; its output streams to the terminal. */
+    fun runCommand(cmd: String) {
+        val line = cmd.trim()
+        if (line.isEmpty()) return
+        if (line.length > IpcLimits.MAX_COMMAND_CHARS) {
+            session.note("команда длиннее ${IpcLimits.MAX_COMMAND_CHARS} символов, не отправлена")
+            return
+        }
+        submit(line)
     }
 
-    fun abort() = client.abort()
+    /**
+     * Runs [cmd] and returns its text output without ANSI codes (it also streams to the terminal),
+     * or null when a stop cut it short, so "stopped" is not mistaken for "printed nothing".
+     */
+    suspend fun query(cmd: String): String? {
+        val stops = session.generation
+        val res = submit(cmd, grab = true).await()
+        return if (cutShort(res, stops)) null else res.grabbed
+    }
+
+    private fun submit(cmd: String, grab: Boolean = false): Deferred<ExecResult> {
+        // the firmware chain (download included) owns the client: a command now would hold the write back, and the
+        // service would refuse to start the write under it
+        if (_flash.value.active || flashing.value || session.state.value.link == LinkState.FLASHING) {
+            session.note("Идёт прошивка - команды недоступны")
+            return CompletableDeferred(ExecResult(ResultCode.DROPPED, ""))
+        }
+        // without a session nothing else keeps the process up for a command that needs no device
+        val snap = session.state.value
+        if (!snap.link.holdsService && !snap.activity.running) session.begin(Pm3Ipc.KIND_RUN, null)
+        return session.submit(cmd, grab)
+    }
+
+    private fun cutShort(res: ExecResult, stops: Int) = ResultCode.isTransport(res.code) || session.generation != stops
+
+    /** Ends the running command and drops everything waiting behind it, like pressing Enter in the console. */
+    fun stop() = session.stop()
 
     fun clearTerminal() {
-        client.terminal.clear()
+        session.terminal.clear()
+        session.clearLog()
         _terminal.value = emptyList()
     }
+
+    /** The whole terminal as plain text. */
+    fun terminalText(): String = session.terminal.snapshot().joinToString("\n") { Ansi.strip(it) }
+
+    /** Saves the terminal as a log file the Library lists. Null when the folder isn't writable. */
+    fun saveLog(): File? = runCatching { library.saveLog(terminalText()) }.getOrNull()
 
     /**
      * Downloads [choice] and writes it with the bootloader flasher. A usb: port is one USB
@@ -247,13 +454,39 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!_flash.value.active) _flash.value = FlashState.Idle
     }
 
+    // The service owns the device from here to flashEnd. There is no disconnect first: the first
+    // flash call closes the session itself, so nothing can reconnect in between.
     private suspend fun takeDeviceForFlashing() {
-        flashing = true
-        _connection.value = Connection.Flashing
-        // the flasher opens the port itself
-        runCatching { client.disconnect() }
-        session?.close()
-        session = null
+        // the first start after an install unpacks the client's files: the write waits for it instead of failing
+        if (!session.state.value.ready && session.state.value.error.isEmpty()) {
+            _flash.value = FlashState.Working("Подготовка", "Клиент запускается…")
+            withTimeoutOrNull(CLIENT_START_WAIT_MS) { session.state.first { it.ready || it.error.isNotEmpty() } }
+        }
+        session.state.value.error.takeIf { it.isNotEmpty() }?.let { throw FlashError(it) }
+        // the service takes the device over only from an idle client; a command that runs is the user's to stop
+        val act = session.state.value.activity
+        if (act.running || act.queued > 0) throw FlashError("Сначала остановите команду")
+        if (!session.begin(Pm3Ipc.KIND_FLASH, null)) {
+            // Android lets only a visible app start the service, and the download may have outlasted the screen
+            if (!session.isUiVisible) {
+                throw FlashError("Вернитесь в приложение и повторите: прошивку можно начать только когда приложение открыто")
+            }
+            // the reason of a refusal is in the state only when it is a failure of this very attempt
+            val snap = session.state.value
+            throw FlashError(
+                snap.linkDetail.takeIf { snap.link == LinkState.FAILED && it.isNotBlank() }
+                    ?: "Не удалось запустить службу прошивки",
+            )
+        }
+        flashing.value = true
+        noAutoConnect = false
+    }
+
+    // Begin(KIND_FLASH) before every pass, after the waits for the user: it brings the service back to the foreground
+    // and renews the lease, whatever happened in the gap. A false answer is not fatal here: the chain is under way,
+    // the service is there, and a refusal of this one is not the write's failure.
+    private fun renewFlashLease() {
+        session.begin(Pm3Ipc.KIND_FLASH, null)
     }
 
     private suspend fun writeWithBootloader(files: List<String>, opts: FlashOptions) {
@@ -269,11 +502,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (Pm3Ids.isDfu(device)) {
                 throw FlashError("Устройство в режиме DFU (загрузчик МК). Используйте «Восстановление через DFU»")
             }
-            val s = openForFlashing(device)
+            ensurePermission(device)
+            renewFlashLease()
             _flash.value = FlashState.Working("Прошивка", "Связь с устройством…")
             val ticker = viewModelScope.launch {
                 while (true) {
-                    val st = FlashLog.status(client.terminal.snapshot())
+                    val st = FlashLog.status(session.terminal.snapshot())
                     if (st.file != null) {
                         _flash.value = FlashState.Working("Прошивка", "Запись ${st.file}… Не отключайте кабель", st.percent)
                     }
@@ -281,10 +515,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             val code = try {
-                client.flash(s.port, files, opts.includeBootrom, opts.force)
+                session.flash(device.deviceName, files, opts.includeBootrom, opts.force)
             } finally {
                 ticker.cancel()
-                s.close()
             }
             when (code) {
                 0 -> {
@@ -302,8 +535,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
 
-                -1 -> throw FlashError("Клиент занят другой командой, повторите")
-                else -> throw FlashError("Прошивка не удалась (код $code), подробности на вкладке «Терминал»")
+                else -> failFlash(code, "Прошивка")
             }
         }
         throw FlashError("Устройство не перешло в режим загрузчика")
@@ -313,10 +545,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         takeDeviceForFlashing()
         val device = usb.findProxmark()?.takeIf { Pm3Ids.isDfu(it) }
             ?: throw FlashError("Устройство не в режиме DFU: зажмите кнопку и подключите кабель")
-        val s = openForFlashing(device)
+        ensurePermission(device)
+        renewFlashLease()
         val ticker = viewModelScope.launch {
             while (true) {
-                FlashLog.dfuStatus(client.terminal.snapshot())?.let { (phase, pct) ->
+                FlashLog.dfuStatus(session.terminal.snapshot())?.let { (phase, pct) ->
                     val what = when (phase) {
                         "Erasing" -> "Стирание"
                         "Writing" -> "Запись"
@@ -328,21 +561,43 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         val code = try {
-            client.dfuFlash(s.port, image)
+            session.dfuFlash(device.deviceName, image)
         } finally {
             ticker.cancel()
-            s.close()
         }
-        if (code != 0) throw FlashError("Запись через DFU не удалась (код $code), подробности на вкладке «Терминал»")
+        if (code != 0) failFlash(code, "Запись через DFU")
         _flash.value = FlashState.Done("Образ записан. Отпустите кнопку, отключите и снова подключите Proxmark5")
     }
 
-    private suspend fun openForFlashing(device: UsbDevice): UsbSession {
-        if (!usb.hasPermission(device)) {
-            _flash.value = FlashState.Working("Доступ к USB", "Разрешите приложению доступ к устройству")
-            usb.requestPermission(device) ?: throw FlashError("Нет доступа к USB-устройству")
+    /** Ends a write that [code] says did not succeed. */
+    private fun failFlash(code: Int, what: String): Nothing = when (code) {
+        ResultCode.TRANSPORT_LOST -> {
+            // the client's process died under the write: the device may be half written, so nothing connects to it unasked
+            noAutoConnect = true
+            throw FlashError(
+                "Прошивка прервана: процесс клиента завершился. Не отключайте устройство, повторите; " +
+                    "если не загружается — восстановление через DFU"
+            )
         }
-        return usb.open(device) ?: throw FlashError("Не удалось открыть USB-устройство")
+
+        ResultCode.BUSY -> throw FlashError("Клиент занят: остановите команду и повторите")
+        ResultCode.DROPPED -> throw FlashError(
+            session.state.value.error.ifEmpty { "Клиент запускается, повторите через несколько секунд" },
+        )
+        else -> throw FlashError("$what не удалась (код $code), подробности в терминале (панель сверху)")
+    }
+
+    // The service opens the device itself (the permission is the app's, not the process's): only ask for it here.
+    // The wait is bounded: a dialog nobody answers must end the chain (and its flashEnd), not outlast the lease.
+    private suspend fun ensurePermission(device: UsbDevice) {
+        if (!usb.hasPermission(device)) {
+            _flash.value = FlashState.Working("Доступ к USB", "Разрешите приложению доступ к устройству (ждём до минуты)")
+            when (withTimeoutOrNull(FLASH_USER_WAIT_MS) { usb.requestPermission(device) != null }) {
+                true -> Unit
+                false -> throw FlashError("Нет доступа к USB-устройству")
+                null -> throw FlashError("Нет ответа на запрос доступа к USB за минуту. Повторите и нажмите «Разрешить»")
+            }
+        }
     }
 
     /** Waits for a Proxmark that is not the enumeration [used] (its device node changes on reboot). */
@@ -360,26 +615,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val device = awaitDevice(used, 15_000) ?: return
         if (!usb.hasPermission(device)) {
             _flash.value = FlashState.Working("Переподключение", "Разрешите доступ к USB, чтобы подключиться к новой прошивке")
-            usb.requestPermission(device)
+            // the write is done: an unanswered dialog only ends the wait, it fails nothing
+            withTimeoutOrNull(FLASH_USER_WAIT_MS) { usb.requestPermission(device) }
         }
     }
 
-    private fun endFlashing() {
-        if (!flashing) return
-        flashing = false
-        _connection.value = Connection.NoDevice
-        refreshDevice()
-    }
-
-    private suspend fun <T> runGuarded(block: suspend () -> T): T? {
-        _busy.value = true
-        return try {
-            block()
-        } catch (e: Exception) {
-            null
-        } finally {
-            _busy.value = false
+    private suspend fun endFlashing() {
+        if (!flashing.value) return
+        // also when the chain was cancelled (the screen went away): the service must be told in any case
+        withContext(NonCancellable) {
+            session.flashEnd()
+            // flashEnd is oneway: wait for the service to give the device back before looking for it
+            withTimeoutOrNull(3_000) { session.state.first { it.link != LinkState.FLASHING } }
+            flashing.value = false
         }
+        if (viewModelScope.isActive) findAndConnect(byUser = false)
     }
 }
 

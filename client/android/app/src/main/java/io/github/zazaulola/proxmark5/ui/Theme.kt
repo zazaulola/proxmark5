@@ -10,6 +10,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import io.github.zazaulola.proxmark5.parse.ActivityKind
 import io.github.zazaulola.proxmark5.parse.AnsiColor
 
 private val DarkColors = darkColorScheme(
@@ -35,6 +36,28 @@ fun Pm3Theme(content: @Composable () -> Unit) {
         else -> LightColors
     }
     MaterialTheme(colorScheme = colors, content = content)
+}
+
+/** The terminal is always dark, whatever the app theme: the ANSI colors below are tuned for it. */
+val TerminalBackground = Color(0xFF0B0F1A)
+val TerminalForeground = Color(0xFFE6E6E6)
+
+/** Status colors of the live session, shared by the terminal strip and the Status screen. */
+val ActivityIdleColor = Color(0xFF8A8A8A)
+val ActivityCommandColor = Color(0xFF6BE675)
+val ActivitySnifferColor = Color(0xFFFFD166)
+val ActivityEmulationColor = Color(0xFFE39BFF)
+
+/** Status colors for themed surfaces: the pale ones above are for the always-dark terminal only. */
+@Composable
+fun activityColorOnSurface(kind: ActivityKind): Color {
+    if (isSystemInDarkTheme()) return activityColor(kind)
+    return when (kind) {
+        ActivityKind.IDLE -> Color(0xFF616161)
+        ActivityKind.COMMAND -> Color(0xFF1B7F2A)
+        ActivityKind.SNIFFER -> Color(0xFF8A6200)
+        ActivityKind.EMULATION -> Color(0xFF8E2DB5)
+    }
 }
 
 /** Maps the client's 16 ANSI colors to readable on-screen colors (tuned for dark). */

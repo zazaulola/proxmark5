@@ -8,15 +8,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import io.github.zazaulola.proxmark5.parse.Ansi
 
 /** One line of client output, rendering its ANSI colors. */
 @Composable
-fun AnsiText(line: String, modifier: Modifier = Modifier, fontSize: TextUnit = TextUnit.Unspecified) {
+fun AnsiText(
+    line: String,
+    modifier: Modifier = Modifier,
+    fontSize: TextUnit = TextUnit.Unspecified,
+    fontFamily: FontFamily? = null,
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
+) {
     val base = LocalContentColor.current
     val annotated: AnnotatedString = remember(line, base) {
         val styled = Ansi.parse(line)
@@ -38,5 +47,12 @@ fun AnsiText(line: String, modifier: Modifier = Modifier, fontSize: TextUnit = T
             if (pos < styled.text.length) append(styled.text.substring(pos))
         }
     }
-    Text(annotated, modifier = modifier, fontSize = fontSize)
+    Text(
+        annotated,
+        modifier = modifier,
+        fontSize = fontSize,
+        fontFamily = fontFamily,
+        maxLines = maxLines,
+        overflow = overflow,
+    )
 }

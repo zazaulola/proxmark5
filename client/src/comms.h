@@ -101,6 +101,7 @@ void clearCommandBuffer(void);
 
 bool IsReconnectedOk(void);
 bool IsCommunicationThreadDead(void);
+bool IsCommunicationThreadExited(void);
 bool SetCommunicationReceiveMode(bool isRawMode);
 void SetCommunicationRawReceiveBuffer(uint8_t *buffer, size_t len);
 size_t GetCommunicationRawReceiveNum(void);

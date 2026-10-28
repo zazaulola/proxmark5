@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Folders the app may hand to other apps through FileProvider (ShareFile.kt): the saved
+     dumps, keys and logs live in the app's external files dir, or under filesDir without it. -->
+<paths>
+    <external-files-path name="saved" path="." />
+    <files-path name="internal" path="." />
+</paths>

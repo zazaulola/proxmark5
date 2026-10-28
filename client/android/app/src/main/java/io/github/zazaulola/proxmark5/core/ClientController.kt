@@ -2,9 +2,14 @@ package io.github.zazaulola.proxmark5.core
 
 import android.content.Context
 import android.util.Log
+import io.github.zazaulola.proxmark5.parse.CommandNode
+import io.github.zazaulola.proxmark5.parse.CommandTree
 import io.github.zazaulola.proxmark5.parse.TerminalBuffer
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
@@ -45,8 +50,17 @@ class ClientController private constructor(context: Context) {
     val dumpDir: String = (context.getExternalFilesDir(null)?.let { File(it, "dumps") }
         ?: File(home, "dumps")).apply { mkdirs() }.absolutePath
 
+    /** Where the app saves terminal logs; the Library lists them. */
+    val logsDir: String = (context.getExternalFilesDir(null)?.let { File(it, "logs") }
+        ?: File(home, "logs")).apply { mkdirs() }.absolutePath
+
     @Volatile
     private var started = false
+
+    private val _ready = MutableStateFlow(false)
+
+    /** Flips to true once the client is up and [clientVersion] / [clientArmSrc] are known. */
+    val ready: StateFlow<Boolean> = _ready.asStateFlow()
 
     @Volatile
     var clientVersion: String = ""
@@ -67,6 +81,7 @@ class ClientController private constructor(context: Context) {
         clientArmSrc = NativeClient.nativeClientArmSrc()
         startReader(fd)
         started = true
+        _ready.value = true
     }
 
     private fun startReader(fd: Int) {
@@ -109,6 +124,20 @@ class ClientController private constructor(context: Context) {
                 runCatching { stream.close() }
             }
         }, "pm3-output").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * The client's command tree. Queued behind a running command like any native call, and
+     * what is available depends on the connection, so ask again when that changes.
+     */
+    suspend fun commandTree(): CommandNode = withContext(dispatcher) {
+        ensureStarted()
+        CommandTree.parse(String(NativeClient.nativeCommandTree(), StandardCharsets.UTF_8))
+    }
+
+    /** A line of the app's own in the log (connected, link lost, ...), apart from the client's output. */
+    fun note(text: String) {
+        terminal.append("\n[\u001b[36msession\u001b[0m] $text\n")
     }
 
     suspend fun connect(port: String): Boolean = withContext(dispatcher) {

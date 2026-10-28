@@ -75,6 +75,7 @@ fun FirmwareScreen(vm: AppViewModel) {
     val flash by vm.flash.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
+    val clientReady by vm.clientReady.collectAsStateWithLifecycle()
     val terminal by vm.terminal.collectAsStateWithLifecycle()
 
     // what the confirmation dialog is about
@@ -94,13 +95,13 @@ fun FirmwareScreen(vm: AppViewModel) {
 
     val inDfu = conn is Connection.Dfu
     val canFlash = !flash.active && !busy
-    val clientArmSrc = vm.clientArmSrc
+    val clientArmSrc = if (clientReady) vm.clientArmSrc else ""
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        VersionsCard(conn, vm.clientVersion, clientArmSrc)
+        VersionsCard(conn, if (clientReady) vm.clientVersion else "", clientArmSrc)
 
         if (flash !is FlashState.Idle) {
             FlashCard(flash, terminal.takeLast(4), onDismiss = vm::dismissFlash)

@@ -4,12 +4,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -27,50 +25,41 @@ import io.github.zazaulola.proxmark5.parse.Band
 import io.github.zazaulola.proxmark5.parse.CardHit
 import io.github.zazaulola.proxmark5.parse.SearchResult
 
+/**
+ * Quick action on top of Functions: find out what card is on the antenna (`hf search`, then
+ * `lf search`) and show it as cards instead of console text. The commands run in the living
+ * session like any other, so their output is in the terminal too.
+ */
 @Composable
-fun ReadScreen(vm: AppViewModel) {
+fun CardSearchPanel(vm: AppViewModel) {
     val conn by vm.connection.collectAsStateWithLifecycle()
     val read by vm.read.collectAsStateWithLifecycle()
     val connected = conn is Connection.Connected
-    val scroll = rememberScrollState()
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(scroll).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Button(
             onClick = { vm.detectCard() },
             enabled = connected && !read.running,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
         ) {
             if (read.running) {
-                CircularProgressIndicator(Modifier.height(22.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.height(0.dp))
-                Text("  Ищу карту…")
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.size(10.dp))
+                Text("Ищу карту…")
             } else {
                 Text("Определить карту")
             }
         }
         Text(
-            "Кнопка только распознаёт карту (тип и UID) и ничего не сохраняет. " +
-                "Чтобы сохранить дамп, запустите команду дампа на вкладке «Терминал» — " +
-                "файл появится в папке:",
+            if (connected) {
+                "Распознаёт карту (hf search и lf search): тип и UID. Ничего не сохраняет — " +
+                    "дамп снимают командами ниже, файл появится в Library."
+            } else {
+                "Подключите Proxmark5 на вкладке Device → Connect."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(
-            vm.dumpDir,
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (!connected) {
-            Text(
-                "Сначала подключите Proxmark5 на вкладке «Устройство».",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
 
         read.hf?.let { BandResult("13.56 МГц (HF)", it) }
         read.lf?.let { BandResult("125 кГц (LF)", it) }
@@ -119,10 +108,18 @@ private fun HitCard(hit: CardHit) {
             }
             hit.fields.forEach { f ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                    Text(f.key, Modifier.weight(0.42f), style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(f.value, Modifier.weight(0.58f), style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace)
+                    Text(
+                        f.key,
+                        Modifier.weight(0.42f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        f.value,
+                        Modifier.weight(0.58f),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
                 }
             }
         }

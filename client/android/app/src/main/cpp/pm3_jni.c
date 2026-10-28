@@ -21,6 +21,8 @@
 //-----------------------------------------------------------------------------
 
 #include <jni.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +31,7 @@
 
 #include "proxmark3.h"
 #include "cmdmain.h"
+#include "cmdparser.h"
 #include "comms.h"
 #include "commonutil.h"
 #include "dfuse.h"
@@ -185,6 +188,90 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(nativeTakeGrabbed)(JNIEnv *env, jclass clazz
         (*env)->SetByteArrayRegion(env, arr, 0, (jsize) len, (const jbyte *) g_grabbed_output.ptr);
     }
     g_grabbed_output.idx = 0;
+    return arr;
+}
+
+// The command tree as text, built while the client walks its own command tables.
+typedef struct {
+    char *buf;
+    size_t len;
+    size_t cap;
+} tree_buf_t;
+
+static bool tree_reserve(tree_buf_t *b, size_t extra) {
+    if (b->len + extra + 1 <= b->cap) {
+        return true;
+    }
+    size_t cap = b->cap ? b->cap : 16384;
+    while (cap < b->len + extra + 1) {
+        cap *= 2;
+    }
+    char *tmp = realloc(b->buf, cap);
+    if (tmp == NULL) {
+        return false;
+    }
+    b->buf = tmp;
+    b->cap = cap;
+    return true;
+}
+
+static void tree_char(tree_buf_t *b, char c) {
+    if (tree_reserve(b, 1)) {
+        b->buf[b->len++] = c;
+        b->buf[b->len] = '\0';
+    }
+}
+
+// Tabs and newlines separate the fields and lines, so they can't be part of a text.
+static void tree_text(tree_buf_t *b, const char *s) {
+    if (s == NULL) {
+        return;
+    }
+    size_t n = strlen(s);
+    if (!tree_reserve(b, n)) {
+        return;
+    }
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        b->buf[b->len++] = (c == '\t' || c == '\n' || c == '\r') ? ' ' : c;
+    }
+    b->buf[b->len] = '\0';
+}
+
+// One line per command: for every level down to it "name TAB help TAB 1|0" (1 = available).
+static void tree_visit(const command_t *const path[], size_t depth, void *ctx) {
+    tree_buf_t *b = ctx;
+    for (size_t i = 0; i < depth; i++) {
+        if (i > 0) {
+            tree_char(b, '\t');
+        }
+        tree_text(b, path[i]->Name);
+        tree_char(b, '\t');
+        tree_text(b, path[i]->Help);
+        tree_char(b, '\t');
+        tree_char(b, (path[i]->IsAvailable == NULL || path[i]->IsAvailable()) ? '1' : '0');
+    }
+    tree_char(b, '\n');
+}
+
+// Every command the client has, as UTF-8 text (see tree_visit). Availability reflects the
+// connected device, so ask again after connecting or disconnecting.
+JNIEXPORT jbyteArray JNICALL JNI_FN(nativeCommandTree)(JNIEnv *env, jclass clazz) {
+    (void) clazz;
+    tree_buf_t b = {0};
+
+    // some categories run their own parser on the walk token and would print a complaint
+    uint8_t prev = g_printAndLog;
+    g_printAndLog = 0;
+    walkCommandsRecursive(getTopLevelCommandTable(), tree_visit, &b);
+    g_printAndLog = prev;
+
+    jsize len = (jsize) b.len;
+    jbyteArray arr = (*env)->NewByteArray(env, len);
+    if ((arr != NULL) && (len > 0)) {
+        (*env)->SetByteArrayRegion(env, arr, 0, len, (const jbyte *) b.buf);
+    }
+    free(b.buf);
     return arr;
 }
 

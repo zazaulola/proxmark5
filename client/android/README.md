@@ -4,8 +4,9 @@ A visual Android front-end for the Proxmark5, in the spirit of the Chameleon
 apps. It talks to the device over a **USB OTG cable, without root and without
 Termux**.
 
-> Early work in progress. First version: see the device, read a card with one
-> tap, and a full console. MIFARE/clone/emulation screens come next.
+> Work in progress. The app is a front-end to one living client session: see
+> "The app" below. Forms for the common card workflows come on top of the
+> command tree.
 
 ## How it works
 
@@ -26,24 +27,60 @@ Compose UI  ──▶  ClientController (one client thread)  ──▶  JNI (pm3
                         UsbManager.openDevice ───────────────────▶ Proxmark5
 ```
 
+## The app
+
+The app is built around **one living client session**. Connecting starts it and it
+lives until you leave it, the link is lost, or the client dies. The app never waits
+for a command to finish: commands go into a queue, their output streams into the
+log, and a long one (sniff, emulation, hardnested) just runs until you stop it.
+Leaving by hand (*Connect → Выйти из сессии*) really leaves: nothing reconnects until
+you ask or plug the cable in again. Closing the app ends the session too; keeping it
+alive in the background (a foreground service) is not done yet.
+
+```
+ ┌─ terminal (log + input) ────────────┐  collapsed to a strip: status + last line
+ ├─ ═════ slider ═════ ────────────────┤  drag to give the log any part of the screen
+ │  section                            │
+ └─ Device │ Functions │ Library ──────┘
+```
+
+- **Device**: *Connect* (USB works; BT/BLE are shown but need a wireless module the
+  Proxmark5 doesn't have yet), *Metadata* (`hw version`), *Firmware* (config, build,
+  flash), *User data* (`mem info`, and where the app keeps its files), *Status*
+  (idle, progress of the running command, sniffer, emulation, and Stop).
+- **Functions**: the client's own command tree (`prefs`, `analyse`, `data`, `hw`,
+  `emv`, `hf`, `lf`, `mad`, `nfc`, `piv`, `smart`, `mqtt`, `reveng`, `script`,
+  `trace`, `wiegand`). The tree is read from the client itself
+  (`walkCommandsRecursive()`, see `nativeCommandTree`), so it always matches the
+  build in the app and the connected device. Pick a command, add parameters, run.
+  Search finds a command anywhere in the tree. "Определить карту" runs
+  `hf search` and `lf search` and shows the card.
+- **Library**: *Keys*, *Dumps* (what the client saved, sorted by file name) and
+  *Logs* (terminal logs saved from the terminal's toolbar). Files can be shared
+  or deleted.
+
 ## Modules
 
 - **`app`** — the Android application (Kotlin + Jetpack Compose).
   - `core/` — the JNI bridge (`NativeClient`), the single client thread and
-    live console (`ClientController`), and asset unpacking (`ResourceUnpacker`).
+    live console (`ClientController`), the command queue and activity of the session
+    (`CommandPump`), the saved files (`LibraryRepository`), and asset unpacking
+    (`ResourceUnpacker`).
   - `usb/` — finding, permitting and opening the device (`UsbTransport`).
   - `firmware/` — firmware releases, builds on GitHub Actions and downloads
     (`FirmwareController`, `GitHubApi`).
-  - `ui/` — the screens: device, read, firmware, terminal.
+  - `ui/` — the shell (`Pm3App`, `SplitShell`, `TerminalPanel`) and the three
+    sections (`DeviceSection`, `FunctionsSection`, `LibrarySection`).
   - `src/main/cpp/` — `pm3_jni.c` and the CMake glue that builds
     `client/experimental_lib` (the `LIBPM3` client) plus the bridge into
     `libpm3jni.so`.
 - **`parsers`** — a pure-JVM Kotlin module that turns the client's text output
   into typed data (ANSI colors, `hw version`, `hf`/`lf search`, a streaming
-  terminal buffer). It has no Android dependency so it is unit-tested on the JVM.
+  terminal buffer, the command tree, what the session is busy with, library files). It has no Android dependency so it is unit-tested on the JVM.
 
 The app bundles the client's `resources/`, `dictionaries/` (minus the large
-`extras/` and hardnested tables) and lua/cmd scripts as assets, unpacked into
+`extras/` bundle and the hardnested benchmark data; the hardnested tables that
+`hf mf autopwn` needs are shipped) and lua/cmd scripts as assets, unpacked into
 `$HOME/.proxmark3/` on first run so the client finds them.
 
 ## Building
@@ -71,12 +108,12 @@ The parser tests run on any JVM, no Android SDK:
    side, as for flashing).
 3. Allow the USB access prompt. The app connects and shows the device.
 
-The firmware on the Proxmark should match the client the app was built from — the
-device screen warns when it doesn't and leads to the firmware screen.
+The firmware on the Proxmark should match the client the app was built from — Device →
+Metadata warns when it doesn't and leads to Device → Firmware.
 
 ## Firmware updates
 
-The **Прошивка** (firmware) tab updates the Proxmark5 to a chosen version, from the
+Device → **Firmware** updates the Proxmark5 to a chosen version, from the
 phone only.
 
 Firmware can't be compiled on a phone, and upstream releases

@@ -38,6 +38,12 @@ object NativeClient {
     external fun nativeClientArmSrc(): String
 
     /**
+     * Every command the client has as UTF-8 text, see io.github.zazaulola.proxmark5.parse.CommandTree.
+     * Which commands are available depends on the connected device.
+     */
+    external fun nativeCommandTree(): ByteArray
+
+    /**
      * Flashes ELF [files] on [port], like `pm3 --flash`. Returns 0, a negative PM3 error, or
      * [FLASH_REOPEN_PORT]: the device went to its bootloader, a new USB device, so open that
      * one and call again with the same files. [force] skips the client/firmware version check.

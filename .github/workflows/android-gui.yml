@@ -13,6 +13,11 @@ on:
       - 'client/src/**'
       - 'client/include/**'
       - 'client/deps/**'
+      - 'client/resources/**'
+      - 'client/dictionaries/**'
+      - 'client/luascripts/**'
+      - 'client/lualibs/**'
+      - 'client/cmdscripts/**'
       - 'common/**'
       - 'include/**'
       - 'armsrc/**'
@@ -25,6 +30,11 @@ on:
       - 'client/src/**'
       - 'client/include/**'
       - 'client/deps/**'
+      - 'client/resources/**'
+      - 'client/dictionaries/**'
+      - 'client/luascripts/**'
+      - 'client/lualibs/**'
+      - 'client/cmdscripts/**'
       - 'common/**'
       - 'include/**'
       - 'armsrc/**'
@@ -103,6 +113,15 @@ jobs:
         run: |
           mkdir -p out
           cp client/android/app/build/outputs/apk/debug/*.apk out/proxmark5-debug.apk
+
+      # Gradle skips a Sync task whose source directory is not there, with no error, and a client
+      # without its tables and key lists runs all the same: look inside the APK
+      - name: Check the APK carries the client resources
+        run: |
+          unzip -l out/proxmark5-debug.apk > "$RUNNER_TEMP/apk-files.txt"
+          for f in assets/pm3/resources/hardnested_tables/ assets/pm3/dictionaries/mfc_default_keys.dic; do
+            grep -qF "$f" "$RUNNER_TEMP/apk-files.txt" || { echo "::error::the APK has no $f"; exit 1; }
+          done
 
       - uses: actions/upload-artifact@v6
         with:

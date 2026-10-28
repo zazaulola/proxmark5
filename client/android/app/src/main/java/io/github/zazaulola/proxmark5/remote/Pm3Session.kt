@@ -54,6 +54,10 @@ private const val TAG = "pm3-session"
 private const val POLL_MS = 3_000L
 private const val BIND_WAIT_MS = 5_000L
 private const val EXIT_INFO_WAIT_MS = 300L
+
+// the user's own "restart" is done by the service at once: a process still there this long after has a hung host thread
+private const val RESTART_BACKSTOP_MS = 3_000L
+
 private const val WINDOW_MS = 60_000L
 private const val MAX_REBINDS = 3
 private const val MAX_RECONNECTS = 2
@@ -66,6 +70,7 @@ private const val NO_ID = 0L
 
 private const val RESTARTED = "клиент перезапущен"
 private const val DIED = "клиент завершился"
+private const val RESTART_ASKED = "клиент перезапущен по просьбе пользователя"
 private const val UNKNOWN_REASON = "причина неизвестна"
 private const val FGS_REFUSED = "Android не разрешил фоновую службу, откройте приложение и повторите"
 private const val NO_SERVICE = "Не удалось связаться со службой клиента"
@@ -170,6 +175,9 @@ class Pm3Session private constructor(context: Context) {
     @Volatile
     private var uiVisible = false
 
+    /** Between setUiVisible(true) and setUiVisible(false): what [begin] needs for Android to allow the foreground service. */
+    val isUiVisible: Boolean get() = uiVisible
+
     // ---- state of the session thread ----
 
     @Volatile
@@ -193,7 +201,15 @@ class Pm3Session private constructor(context: Context) {
 
     private var backstop: ScheduledFuture<*>? = null
     private var backstopSeq = 0L
+    private var restartBackstop: ScheduledFuture<*>? = null
     private var ownKill: String? = null
+
+    // The user left the session by hand: the service said LEFT, or died doing it. A fresh service starts IDLE and knows nothing of that, so it is kept here.
+    private var leftByUser = false
+    private var leftEpoch = 0L
+
+    // The user asked to leave and the service has not finished: a process that is ended meanwhile was leaving, it was not restarted.
+    private var leaving = false
 
     private var pendingReconnect = false
     private val reconnects = ArrayDeque<Long>()
@@ -263,10 +279,16 @@ class Pm3Session private constructor(context: Context) {
 
     /**
      * Starts the foreground service on a piece of work (Pm3Ipc.KIND_*). Only from a visible UI, which is what
-     * Android needs to allow it; false when it is not visible or Android refuses (then the state says FAILED).
+     * Android needs to allow it; false when it is not visible or Android refuses (then the state says FAILED,
+     * unless it is a later pass of a firmware write that is under way: that one goes on).
      */
     fun begin(kind: Int, deviceName: String?): Boolean {
         if (!uiVisible) return false
+        // asking to connect ends the "left by hand" state, whatever Android answers
+        if (kind == Pm3Ipc.KIND_CONNECT) post {
+            leftByUser = false
+            leaving = false
+        }
         val intent = Intent(app, Pm3Service::class.java)
             .setAction(Pm3Ipc.ACTION_BEGIN)
             .putExtra(Pm3Ipc.EXTRA_KIND, kind)
@@ -274,9 +296,9 @@ class Pm3Session private constructor(context: Context) {
         try {
             ContextCompat.startForegroundService(app, intent)
         } catch (e: IllegalStateException) {
-            return refused(e)
+            return refused(kind, e)
         } catch (e: SecurityException) {
-            return refused(e)
+            return refused(kind, e)
         }
         post { handleBegin(kind) }
         return true
@@ -321,6 +343,7 @@ class Pm3Session private constructor(context: Context) {
         stopCount.incrementAndGet()
         post {
             cutWaiting()
+            leaving = base.link == LinkState.OPENING || base.link == LinkState.CONNECTED || base.link == LinkState.CLOSING
             enqueue(Op { it.disconnect() })
         }
     }
@@ -328,9 +351,11 @@ class Pm3Session private constructor(context: Context) {
     /** Ends the client process; the session starts again clean. */
     fun restartClient(reason: String) {
         stopCount.incrementAndGet()
+        val why = reason.take(MAX_REASON_CHARS)
         post {
             cutWaiting()
-            enqueue(Op { it.restartClient(reason.take(MAX_REASON_CHARS)) })
+            armRestartBackstop(why)
+            enqueue(Op { it.restartClient(why) })
         }
     }
 
@@ -610,6 +635,8 @@ class Pm3Session private constructor(context: Context) {
         tick = null
         backstop?.cancel(false)
         backstop = null
+        restartBackstop?.cancel(false)
+        restartBackstop = null
         snapshotBusy = false
         snapshotAgain = false
         readFailed = false
@@ -638,9 +665,10 @@ class Pm3Session private constructor(context: Context) {
         bind(demand = true)
     }
 
-    private fun refused(e: RuntimeException): Boolean {
+    private fun refused(kind: Int, e: RuntimeException): Boolean {
         Log.w(TAG, "startForegroundService refused", e)
-        post { setLocalFailure(FGS_REFUSED) }
+        // a later pass of a write that is under way: the service is there and the write goes on, it is not for this refusal to fail it
+        post { if (kind != Pm3Ipc.KIND_FLASH || !(base.flashLease || base.link == LinkState.FLASHING)) setLocalFailure(FGS_REFUSED) }
         return false
     }
 
@@ -685,18 +713,40 @@ class Pm3Session private constructor(context: Context) {
     }
 
     private fun applySnapshot(snap: SessionSnapshot) {
+        trackLeft(snap)
         base = snap
         publish()
         if (snap.epoch != followedEpoch) {
             followedEpoch = snap.epoch
             follower.follow(snap.epoch)
         }
+        // what the next UI process needs to know to tell a service that ended unseen from one that had nothing to say
+        follower.working(snap.link.holdsService || snap.activity.running)
         if (needsPoll(snap)) armTick()
     }
 
+    // LEFT is the service's word; it is kept until something else is said. A service that comes up IDLE after the one that said LEFT died did not
+    // forget it by itself, but the same service saying IDLE has dropped it (its device was unplugged).
+    private fun trackLeft(snap: SessionSnapshot) {
+        when (snap.link) {
+            LinkState.LEFT -> {
+                leftByUser = true
+                leftEpoch = snap.epoch
+            }
+
+            LinkState.IDLE -> if (snap.epoch == leftEpoch) leftByUser = false
+            else -> leftByUser = false
+        }
+        if (snap.link != LinkState.OPENING && snap.link != LinkState.CONNECTED && snap.link != LinkState.CLOSING) leaving = false
+    }
+
+    // The session as the UI shows it: the service's, but an idle service that has no memory of the user leaving is still "left".
+    private fun shown(b: SessionSnapshot) =
+        if (leftByUser && b.link == LinkState.IDLE && b.error.isEmpty() && !b.activity.running) b.copy(link = LinkState.LEFT) else b
+
     // A failure of ours only stands in for a service with nothing going on; a session that is under way beats it.
     private fun publish() {
-        val b = base
+        val b = shown(base)
         val failure = localFailure
         if (failure != null && !b.link.holdsService && !b.activity.running) {
             _state.value = b.copy(link = LinkState.FAILED, linkDetail = failure)
@@ -728,12 +778,13 @@ class Pm3Session private constructor(context: Context) {
 
     // ---- the UI's own backstop (design 3.8) ----
 
-    // After Stop on a running command: if the service still shows the same run once its own deadline and our margin are over, we end the process ourselves.
+    // After Stop on a running command: if the service still shows the same run once its own deadline and our margin are over, and has not
+    // reached a verdict on it (stuck: its host thread is alive and the user is being asked), we end the process ourselves.
     private fun armBackstop() {
         val conn = current ?: return
         val snap = base
         val run = snap.activity
-        if (conn.service == null || !run.running || snap.link == LinkState.FLASHING || snap.flashLease) return
+        if (conn.service == null || !run.running || run.stuck || snap.link == LinkState.FLASHING || snap.flashLease) return
         // the first Stop of a run sets the deadline, as it does in the service
         if (backstop != null && backstopSeq == run.seq) return
         backstop?.cancel(false)
@@ -750,17 +801,42 @@ class Pm3Session private constructor(context: Context) {
             if (readFailed) return@fetch
             val snap = base
             val run = snap.activity
-            val sure = run.running && run.seq == seq && snap.link != LinkState.FLASHING && !snap.flashLease
-            if (sure && conn.pid > 0 && snap.pid == conn.pid && conn.pid != Process.myPid()) killService(snap)
+            // stuck: the service has concluded and waits for the user, who may restart it (and then has the backstop below)
+            val sure = run.running && run.seq == seq && !run.stuck && snap.link != LinkState.FLASHING && !snap.flashLease
+            if (sure && isServiceProcess(conn, snap)) {
+                val cmd = run.command
+                killService(snap, "Команда «${shorten(cmd)}» не останавливается, клиент перезапущен", snap.link == LinkState.CONNECTED && StopPolicy.mayKillAutomatically(cmd))
+            }
         }
     }
 
-    private fun killService(snap: SessionSnapshot) {
-        val cmd = snap.activity.command
-        val reason = "Команда «${shorten(cmd)}» не останавливается, клиент перезапущен"
-        val reconnect = snap.link == LinkState.CONNECTED && StopPolicy.mayKillAutomatically(cmd)
+    // The user said "restart the client": the service does it on its host thread within milliseconds. A process that is still there after
+    // RESTART_BACKSTOP_MS has a hung host thread, and the decision that was made is carried out here.
+    private fun armRestartBackstop(reason: String) {
+        val conn = current ?: return
+        val snap = base
+        if (conn.service == null || snap.link == LinkState.FLASHING || snap.flashLease) return
+        restartBackstop?.cancel(false)
+        restartBackstop = later(RESTART_BACKSTOP_MS) { handleRestartBackstop(conn, reason.trim().ifEmpty { RESTART_ASKED }) }
+    }
+
+    private fun handleRestartBackstop(conn: Conn, reason: String) {
+        restartBackstop = null
+        if (conn !== current) return
+        fetch(conn) {
+            if (readFailed) return@fetch
+            val snap = base
+            if (snap.link != LinkState.FLASHING && !snap.flashLease && isServiceProcess(conn, snap)) killService(snap, reason, reconnect = false)
+        }
+    }
+
+    // the process this binding is to, and not our own
+    private fun isServiceProcess(conn: Conn, snap: SessionSnapshot) = conn.pid > 0 && snap.pid == conn.pid && conn.pid != Process.myPid()
+
+    private fun killService(snap: SessionSnapshot, reason: String, reconnect: Boolean) {
+        val left = leaving && snap.link == LinkState.CLOSING
         try {
-            SessionPaths.exitMarker(app).writeText(ExitMarker(snap.epoch, snap.pid, reason, reconnect).toJson())
+            SessionPaths.exitMarker(app).writeText(ExitMarker(snap.epoch, snap.pid, reason, reconnect, left).toJson())
         } catch (e: IOException) {
             Log.w(TAG, "cannot write the exit marker", e)
         }
@@ -783,11 +859,19 @@ class Pm3Session private constructor(context: Context) {
 
         // a service that was doing something for the user: a planned end is a restart, any other is a loss; an idle one going away is no news
         val working = attached && (prev.link in WORKING || hadPending)
+        // the process was ended on the way out of the session: the user has left, whatever the death looks like
+        val left = marker?.left == true
         val dead = when {
+            left -> gone(prev, LinkState.LEFT, "")
             working && marker != null -> gone(prev, LinkState.IDLE, RESTARTED)
             working -> gone(prev, LinkState.LOST, DIED)
             else -> gone(prev, if (prev.link == LinkState.CLOSING) LinkState.IDLE else prev.link, prev.linkDetail)
         }
+        if (left) {
+            leftByUser = true
+            leftEpoch = conn.epoch
+        }
+        leaving = false
         base = dead
         localFailure = if (hadWaiting) NO_SERVICE else null
         publish()
@@ -796,6 +880,8 @@ class Pm3Session private constructor(context: Context) {
 
         // what the client said last comes before anything we add
         follower.drain()
+        // seen to the end: a later UI process has nothing to show of it
+        follower.working(false)
         if (marker != null) {
             ownKill?.let { follower.note(it) }
             if (marker.reconnect) reconnectAfterRestart()

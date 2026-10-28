@@ -50,8 +50,11 @@ target_include_directories(pm3jni PRIVATE
 )
 target_link_libraries(pm3jni PRIVATE pm3rrg_rdv4_static)
 # Every exit() in the client library, which is linked in as a static archive, becomes a call to
-# __wrap_exit() of pm3_jni.c: the process must not run exit handlers under running threads
-target_link_options(pm3jni PRIVATE -Wl,--wrap=exit)
+# __wrap_exit() of pm3_jni.c: the process must not run exit handlers under running threads.
+# The page-size flags align the LOAD segments to 16 KB: NDK r27 and older default to 4 KB, which
+# a device with 16 KB pages runs only in a compatibility mode, or not at all (r28+ needs no flags)
+target_link_options(pm3jni PRIVATE -Wl,--wrap=exit
+        -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384)
 
 if (ANDROID)
     target_link_libraries(pm3jni PRIVATE log)

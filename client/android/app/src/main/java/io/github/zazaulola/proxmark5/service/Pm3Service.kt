@@ -29,6 +29,9 @@ class Pm3Service : Service() {
     private var idleArmed = false
     private var lastStartId = 0
 
+    // Android said no to the last startForeground; not asked again until the need for the foreground has ended
+    private var refusedFgs = false
+
     private val refreshTask = Runnable { refresh() }
     private val idleTask = Runnable {
         idleArmed = false
@@ -111,9 +114,11 @@ class Pm3Service : Service() {
             this, ServiceNotification.ID, notification.build(host.snapshot), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
         foreground = true
+        refusedFgs = false
         null
     } catch (e: RuntimeException) {
         // SecurityException (the prerequisites of the type), IllegalStateException (a start from the background), ...
+        refusedFgs = true
         e.message ?: e.javaClass.simpleName
     }
 
@@ -122,10 +127,17 @@ class Pm3Service : Service() {
     private fun refresh() {
         if (host.needsFgs) {
             disarmIdle()
-        } else if (lastStartId != 0 && !idleArmed) {
-            // (a service that was only bound has nothing to stop)
-            idleArmed = true
-            main.postDelayed(idleTask, IDLE_DELAY_MS)
+            // A firmware write with no foreground under it (the lease ran out between passes and no Begin came since):
+            // try once to enter it here. Only for a write, which must not be left to a bound-only process; a refusal is
+            // reported and nothing is stopped, for a service that is bound and mid-flash stays up.
+            if (!foreground && !refusedFgs && host.snapshot.flashLease) enterForeground()?.let { host.foregroundRefused(it) }
+        } else {
+            refusedFgs = false
+            // (a service that was only bound and never in the foreground has nothing to stop)
+            if ((lastStartId != 0 || foreground) && !idleArmed) {
+                idleArmed = true
+                main.postDelayed(idleTask, IDLE_DELAY_MS)
+            }
         }
         if (foreground) notification.update(host.snapshot)
     }

@@ -18,6 +18,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.zazaulola.proxmark5.remote.Pm3Session
 import kotlinx.coroutines.launch
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
@@ -31,7 +32,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleUsbIntent(intent)
+        // The launch intent comes back with every re-creation (a config change, the process killed and the app
+        // reopened from Recents): only a first start is a new plug-in, or a session left by hand would reopen itself.
+        if (savedInstanceState == null) handleUsbIntent(intent)
         setContent { Pm3App(vm) }
         askForNotificationsOnce()
 
@@ -76,9 +79,10 @@ class MainActivity : ComponentActivity() {
     private fun askForNotificationsOnce() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
-        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
-        if (prefs.getBoolean(ASKED_NOTIFICATIONS, false)) return
-        prefs.edit().putBoolean(ASKED_NOTIFICATIONS, true).apply()
+        // a marker in noBackupFilesDir, not a preference: a backup restore must not tell a new phone it has asked
+        val marker = File(noBackupFilesDir, ASKED_NOTIFICATIONS)
+        if (marker.exists()) return
+        runCatching { marker.createNewFile() }
         askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 

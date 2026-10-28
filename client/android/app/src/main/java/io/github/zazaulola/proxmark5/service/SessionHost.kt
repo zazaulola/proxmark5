@@ -35,7 +35,7 @@ internal class SessionHost private constructor(private val app: Context) {
         fun changed()
     }
 
-    /** Closing the session: where it ends up, what to tell, and whether the running command is asked to stop (a lost link is not). */
+    /** Closing the session: where it ends up, what to tell, and whether the running command gets Enter and BREAK (a lost link: Enter only). */
     private class Teardown(val finalState: LinkState, val detail: String, val gentle: Boolean)
 
     private val epoch = Random.nextLong() ushr 1
@@ -67,6 +67,9 @@ internal class SessionHost private constructor(private val app: Context) {
 
     // a flash or dfu task is queued or running
     private var flashActive = false
+
+    // flashEnd came while that task was running: the chain is over when it returns
+    private var endAsked = false
     private var leaseToken = 0L
 
     // the device of the session that is opening, open, closing, or was left or lost
@@ -325,7 +328,7 @@ internal class SessionHost private constructor(private val app: Context) {
         }
     }
 
-    // 3.5 and 3.6: the queue is cut, the running command is ended (or, with the device gone, awaited) and the session is closed
+    // 3.5 and 3.6: the queue is cut, the running command is asked to end (with the device gone: by Enter only) and the session is closed
     private fun beginTeardown(td: Teardown) {
         teardown = td
         link = LinkState.CLOSING
@@ -338,8 +341,14 @@ internal class SessionHost private constructor(private val app: Context) {
                 control.interrupt(run)
             }
         } else {
-            // the device is gone, so no Enter and no BREAK: the client thread has this long to let go of the command
+            // the client thread has this long to let go of the command; then its close gets a budget of its own (onClientIdle)
             armDeadline(LOSS_WAIT_MS) { hardKill("Связь потеряна, клиент завис", reconnect = false) }
+            // The device is gone, so no BREAK (deviceLost keeps pm3-ctl from sending it), but Enter is a write to a pipe of our
+            // own: without it the commands that poll the keyboard spin on the dead link until the deadline above kills the process.
+            if (run != null) {
+                run.stopping = true
+                control.interrupt(run)
+            }
         }
         // queued behind the command that runs: the client thread closes its side first, then the USB link
         engine.close { post { onClosed(td) } }
@@ -373,29 +382,38 @@ internal class SessionHost private constructor(private val app: Context) {
             return
         }
         log.note(reason)
-        ExitMarkers.write(app, ExitMarker(epoch, pid, reason, reconnect))
+        // the user was leaving when the process had to go: the UI stays in LEFT, and nothing reconnects by itself
+        ExitMarkers.write(app, ExitMarker(epoch, pid, reason, reconnect, left = teardown?.finalState == LinkState.LEFT))
         wakeLock.set(false)
         Process.killProcess(pid)
     }
 
     private fun onClientIdle() {
-        // the command a Stop was waiting for is over: its timer has nothing left to do
-        if (teardown == null && engine.current() == null) clearDeadline()
+        if (engine.current() != null) return
+        val td = teardown
+        when {
+            // the command a Stop was waiting for is over: its timer has nothing left to do
+            td == null -> clearDeadline()
+            // A lost link: the command let go, and what is left is the close (nativeClose, the USB link). It has a fresh
+            // budget, so the one the command used up can not kill a close that is about to finish.
+            !td.gentle -> armDeadline(CLOSE_WAIT_MS) { hardKill("Связь потеряна, закрытие зависло", reconnect = false) }
+        }
     }
 
-    // 3.7: the UI is about to write a firmware: the lease holds the service and the device
-    private fun beginFlash() {
+    // 3.7: the UI is about to write a firmware: the lease holds the service and the device.
+    // Only an idle engine is taken over: a command that runs would keep the flash task waiting, and with the link
+    // in FLASHING nothing could stop it (Stop, leaving and the restart are refused then). False: refused, nothing changed.
+    private fun beginFlash(): Boolean {
         if (link == LinkState.FLASHING) {
             armLease()
-            return
+            return true
+        }
+        if (!engine.refuseIfIdle()) {
+            log.note("Прошивка: сначала остановите команду")
+            return false
         }
         enterFlashing()
-        // a command that still runs on the session the flasher is about to close: ask it to end, nothing more
-        val run = engine.cut()
-        if (run != null) {
-            run.stopping = true
-            control.interrupt(run)
-        }
+        return true
     }
 
     private fun enterFlashing() {
@@ -428,16 +446,22 @@ internal class SessionHost private constructor(private val app: Context) {
             notifier.result(id, ResultCode.DROPPED, NO_BYTES)
             return false
         }
+        // the UI should have sent Begin(KIND_FLASH) first; if it did not, this does the same (and a command that runs refuses it)
+        if (!beginFlash()) {
+            notifier.result(id, ResultCode.BUSY, NO_BYTES)
+            return false
+        }
         flashActive = true
-        // the UI should have sent Begin(KIND_FLASH) first; if it did not, this does the same
-        beginFlash()
         return true
     }
 
     private fun onFlashDone(id: Long, code: Int) {
         flashActive = false
+        // the UI ended its chain while this pass wrote: nobody calls again, whatever the pass came to
+        val ended = endAsked
+        endAsked = false
         notifier.result(id, code, NO_BYTES)
-        if (code == NativeClient.FLASH_REOPEN_PORT && link == LinkState.FLASHING) {
+        if (!ended && code == NativeClient.FLASH_REOPEN_PORT && link == LinkState.FLASHING) {
             // the device went to its bootloader, a new USB device: the UI opens that one with the next call
             linkDetail = "ждём загрузчик"
             armLease()
@@ -447,8 +471,8 @@ internal class SessionHost private constructor(private val app: Context) {
     }
 
     private fun onFlashEnd() {
-        // a write that is still running ends the lease itself when it returns
-        if (!flashActive) leaveFlashing()
+        // a write that is still running ends the lease itself when it returns (onFlashDone)
+        if (flashActive) endAsked = true else leaveFlashing()
     }
 
     private fun armLease() {
@@ -571,10 +595,12 @@ internal class SessionHost private constructor(private val app: Context) {
     private fun shorten(cmd: String) = if (cmd.length > 40) cmd.take(40) + "…" else cmd
 
     private fun start() {
+        // first, and not from the host thread: a binder thread may queue a command as soon as the service is up,
+        // and it must find the start of the client ahead of it on the client thread (else it is answered "dropped")
+        engine.start()
         post {
             usb.watchDetach { name -> post { onDetached(name) } }
             log.pruneOld()
-            engine.start()
         }
     }
 
@@ -583,7 +609,11 @@ internal class SessionHost private constructor(private val app: Context) {
         private const val POLL_MS = 500L
         private const val LOSS_MISSES = 2
         private const val LOSS_WAIT_MS = 5_000L
-        private const val LEASE_MS = 90_000L
+        private const val CLOSE_WAIT_MS = 5_000L
+
+        // The lease outlasts the UI's longest wait inside a flash chain (60 s for the USB permission, 60 s for the
+        // bootloader), and the UI sends Begin(KIND_FLASH) before every pass; it only frees a service whose UI is gone.
+        private const val LEASE_MS = 180_000L
         private const val MAX_NOTE_CHARS = 2_000
         private const val MAX_REASON_CHARS = 200
         private const val LOST_TEXT = "Устройство отключено. Подключите его снова, чтобы начать новую сессию."

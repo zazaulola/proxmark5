@@ -19,7 +19,10 @@ object StopPolicy {
     /** Time for a command known not to look at the keyboard: just enough for a BREAK to land. */
     const val STUBBORN_GRACE_MS = 1_500L
 
-    /** The UI's own backstop: it kills the service process this long after the service's deadline. */
+    /**
+     * The UI's own backstop: it kills the service process this long after the service's deadline, and only when
+     * the service has not concluded itself (act.stuck: its host thread is alive and the user is asked).
+     */
     const val UI_BACKSTOP_MS = 2_000L
 
     private val WS = Regex("\\s+")

@@ -40,13 +40,16 @@ enum class LinkState(val code: Int) {
 
 /** Result codes of `submit` / `flash` that are not the client's own return values. */
 object ResultCode {
-    /** Dropped before it ran: Stop, leaving the session or a lost link flushed the queue. */
+    /**
+     * Cut short by Stop, leaving the session, a lost link or a firmware write: dropped before it ran (the queue
+     * was flushed), or ended while it ran (what it printed still comes with the result).
+     */
     const val DROPPED = Int.MIN_VALUE
 
     /** The service process died or could not be reached: the command's fate is unknown. */
     const val TRANSPORT_LOST = Int.MIN_VALUE + 1
 
-    /** The client was busy with another exclusive call. */
+    /** The client was busy with another exclusive call, or a command was running (a flash is refused then). */
     const val BUSY = -1
 
     /** True for the codes that mean the command did not get a normal answer. */

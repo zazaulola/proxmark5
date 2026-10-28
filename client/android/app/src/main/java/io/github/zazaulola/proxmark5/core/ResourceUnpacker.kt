@@ -9,12 +9,16 @@ import java.io.IOException
 /**
  * Unpacks the client resource tree bundled in assets/pm3 into $HOME/.proxmark3,
  * which is the first place the client searches (fileutils.c). Re-runs only when the
- * app version changes, so the one-time copy does not slow every launch.
+ * app is installed again, so the one-time copy does not slow every launch.
  *
- * The client calls exit() when a table it needs (hardnested) is missing or cut short, so a
+ * The client calls exit() when a table it reads (hardnested) is cut short or damaged, so a
  * copy that failed half way must not pass for a finished one: every file is written under a
  * temporary name and renamed when complete, the version stamp is written only after everything
  * was copied, and any failure is thrown to the caller (the service reports it, it does not die of it).
+ *
+ * Only the service process calls this (ClientEngine.bringUp, on the one client thread). The
+ * temporary names are the same for every caller, so a second process unpacking at the same time
+ * would write into the same files: the UI process must never call it.
  */
 object ResourceUnpacker {
     private const val ASSET_ROOT = "pm3"
@@ -27,7 +31,10 @@ object ResourceUnpacker {
         if (!dest.isDirectory && !dest.mkdirs()) throw IOException("не удалось создать ${dest.path}")
         val stamp = File(dest, STAMP)
         val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
-        val version = PackageInfoCompat.getLongVersionCode(info).toString() + ":" + info.versionName
+        // lastUpdateTime moves with every install, so an APK rebuilt under the same version number
+        // (a CI build, `adb install -r`) is unpacked again, and so is a tree restored from a backup
+        val version = PackageInfoCompat.getLongVersionCode(info).toString() + ":" + info.versionName +
+            ":" + info.lastUpdateTime
 
         if (runCatching { stamp.readText() }.getOrNull() == version) return
         // an unpack that is interrupted must not look finished next time
@@ -39,6 +46,10 @@ object ResourceUnpacker {
     private fun copyTree(ctx: Context, assetPath: String, dest: File) {
         val children = ctx.assets.list(assetPath) ?: throw IOException("не удалось прочитать ресурсы $assetPath")
         if (children.isEmpty()) {
+            // an APK built without the client resources has no assets/pm3, and listing a path that is
+            // not there gives an empty array too: say so, not "unpacked" with nothing under a stamp.
+            // Only the top level can say it, an empty directory further down is legitimate
+            if (assetPath == ASSET_ROOT) throw IOException("в APK нет ресурсов клиента")
             // assets.list() returns nothing for a file
             copyFile(ctx, assetPath, dest)
             return

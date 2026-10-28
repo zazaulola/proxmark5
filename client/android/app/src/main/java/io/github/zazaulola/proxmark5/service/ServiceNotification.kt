@@ -61,6 +61,8 @@ internal class ServiceNotification(private val ctx: Context) {
     private fun text(snap: SessionSnapshot): String = when {
         flashing(snap) -> "Идёт прошивка — не отключайте кабель"
         snap.link == LinkState.OPENING -> "Подключаюсь к Proxmark…"
+        // the buttons below can do no more for it; the app can (restart the client)
+        snap.activity.stuck -> "Команда не останавливается — откройте приложение"
         snap.link == LinkState.CLOSING -> "Закрываю сессию…"
         snap.activity.running -> "Выполняется: " + snap.activity.command.take(MAX_COMMAND_CHARS)
         snap.link == LinkState.CONNECTED -> "Подключено"

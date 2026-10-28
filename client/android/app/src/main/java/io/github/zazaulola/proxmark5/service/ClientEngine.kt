@@ -162,6 +162,19 @@ internal class ClientEngine(
     }
 
     /**
+     * [refuse] for the flasher, but only if no command runs or waits: false then, and nothing changed. One
+     * lock for the look and the refusal, so a command can not slip in between and keep the flash waiting.
+     */
+    fun refuseIfIdle(): Boolean = synchronized(lock) {
+        if (currentRun != null || queue.isNotEmpty()) {
+            false
+        } else {
+            refusing = true
+            true
+        }
+    }
+
+    /**
      * Stop: counts a new generation, drops everything that waits (each gets "dropped") and returns the
      * command that runs right now, if any. The caller ends that one (Enter, BREAK, a timer).
      */
@@ -248,6 +261,10 @@ internal class ClientEngine(
         } finally {
             synchronized(sendLock) { currentRun = null }
         }
+        // A Stop since this command started (the UI's, the notification's, leaving the session, a lost link) cut it: that
+        // goes to the UI with the result, which arrives in order, and it keeps what the command printed. The generation
+        // is what cut() counts, whereas run.stopping is set later by the host thread and a fast command can beat it.
+        if (stopGen != run.gen0) code = ResultCode.DROPPED
         notifier.result(entry.id, code, IpcLimits.clampResult(grabbed))
         idle()
         kick()
@@ -288,6 +305,8 @@ internal class ClientEngine(
     }
 
     private fun openSession(name: String): OpenResult {
+        // A Begin(KIND_FLASH) whose pass never came ends in IDLE with the old session still open behind it: let go of that first
+        releaseSession()
         try {
             retrying {
                 val port = usb.open(name, UsbLink.Purpose.CONNECT)

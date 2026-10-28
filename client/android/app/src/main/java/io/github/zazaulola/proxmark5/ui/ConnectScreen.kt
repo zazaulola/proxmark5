@@ -30,11 +30,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.zazaulola.proxmark5.parse.ActivityKind
+import io.github.zazaulola.proxmark5.session.LinkState
 
 /** How the app reaches the Proxmark, and the state of the session. */
 @Composable
 fun ConnectScreen(vm: AppViewModel, onOpenFirmware: () -> Unit) {
     val conn by vm.connection.collectAsStateWithLifecycle()
+    val session by vm.sessionState.collectAsStateWithLifecycle()
     val clientReady by vm.clientReady.collectAsStateWithLifecycle()
 
     Column(
@@ -49,8 +51,17 @@ fun ConnectScreen(vm: AppViewModel, onOpenFirmware: () -> Unit) {
                 InfoCard(
                     "Подключите Proxmark5",
                     "Вставьте устройство в OTG-кабель (кабель со стороны кнопки). " +
-                        "Приложение откроется само, когда вы разрешите доступ к USB.",
+                        "Приложение откроется само, когда вы разрешите доступ к USB. " +
+                        "Если оно уже вставлено, нажмите «Искать устройство».",
                 )
+                // why there is no session although a device may be plugged in (the client was restarted, ...)
+                if (session.link == LinkState.IDLE && session.linkDetail.isNotBlank()) {
+                    Text(
+                        session.linkDetail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Button(onClick = { vm.searchDevice() }) { Text("Искать устройство") }
             }
 
@@ -168,7 +179,7 @@ private fun StateCard(conn: Connection) {
         is Connection.Failed -> "Ошибка" to MaterialTheme.colorScheme.error
         is Connection.Lost -> "Связь потеряна" to MaterialTheme.colorScheme.error
         Connection.Left -> "Вы вышли из сессии" to MaterialTheme.colorScheme.onSurfaceVariant
-        else -> "Нет устройства" to MaterialTheme.colorScheme.onSurfaceVariant
+        else -> "Нет подключения" to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Card(
         Modifier.fillMaxWidth(),

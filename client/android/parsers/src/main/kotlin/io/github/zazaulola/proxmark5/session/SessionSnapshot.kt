@@ -114,12 +114,15 @@ data class ExitMarker(
     val reason: String,
     /** The UI may start a new session by itself (a Stop on a command that ignores Enter). */
     val reconnect: Boolean,
+    /** The process was killed while the user was leaving the session: the UI stays in LEFT, not IDLE. */
+    val left: Boolean = false,
 ) {
     fun toJson(): String = JSONObject().apply {
         put("epoch", epoch)
         put("pid", pid)
         put("reason", reason)
         put("reconnect", reconnect)
+        put("left", left)
     }.toString()
 
     companion object {
@@ -128,7 +131,7 @@ data class ExitMarker(
             return try {
                 val o = JSONObject(json)
                 if (!o.has("epoch") || !o.has("pid")) return null
-                ExitMarker(o.getLong("epoch"), o.getInt("pid"), o.optString("reason"), o.optBoolean("reconnect"))
+                ExitMarker(o.getLong("epoch"), o.getInt("pid"), o.optString("reason"), o.optBoolean("reconnect"), o.optBoolean("left"))
             } catch (_: JSONException) {
                 null
             }

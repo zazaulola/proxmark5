@@ -193,6 +193,11 @@ class SessionSnapshotTest {
     fun exitMarkerRoundTripsAndRejectsGarbage() {
         val m = ExitMarker(epoch = 99L, pid = 1234, reason = "команда не остановилась", reconnect = true)
         assertEquals(m, ExitMarker.parse(m.toJson()))
+        assertFalse(m.left)
+        val l = m.copy(reconnect = false, left = true)
+        assertEquals(l, ExitMarker.parse(l.toJson()))
+        // a marker written before the field existed means "not left"
+        assertEquals(m, ExitMarker.parse("""{"epoch":99,"pid":1234,"reason":"команда не остановилась","reconnect":true}"""))
         assertNull(ExitMarker.parse(null))
         assertNull(ExitMarker.parse(""))
         assertNull(ExitMarker.parse("{}"))

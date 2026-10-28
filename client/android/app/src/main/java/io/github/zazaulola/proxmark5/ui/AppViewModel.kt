@@ -33,6 +33,7 @@ import io.github.zazaulola.proxmark5.session.SessionSnapshot
 import io.github.zazaulola.proxmark5.usb.Pm3Ids
 import io.github.zazaulola.proxmark5.usb.UsbTransport
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -84,6 +85,10 @@ sealed interface FlashState {
 data class FlashOptions(val includeBootrom: Boolean = false, val force: Boolean = false)
 
 private class FlashError(message: String) : Exception(message)
+
+// The longest the firmware chain waits for the user (the USB permission dialog). With the wait for the bootloader
+// device (30 s at most) a gap between two passes stays under 90 s, inside the service's flash lease (180 s).
+private const val FLASH_USER_WAIT_MS = 60_000L
 
 data class ReadState(
     val running: Boolean = false,
@@ -367,6 +372,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun submit(cmd: String, grab: Boolean = false): Deferred<ExecResult> {
+        // the firmware chain (download included) owns the client: a command now would hold the write back, and the
+        // service would refuse to start the write under it
+        if (_flash.value.active || flashing.value || session.state.value.link == LinkState.FLASHING) {
+            session.note("Идёт прошивка - команды недоступны")
+            return CompletableDeferred(ExecResult(ResultCode.DROPPED, ""))
+        }
         // without a session nothing else keeps the process up for a command that needs no device
         val snap = session.state.value
         if (!snap.link.holdsService && !snap.activity.running) session.begin(Pm3Ipc.KIND_RUN, null)
@@ -442,11 +453,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // The service owns the device from here to flashEnd. There is no disconnect first: the first
     // flash call closes the session itself, so nothing can reconnect in between.
     private fun takeDeviceForFlashing() {
+        // the service takes the device over only from an idle client; a command that runs is the user's to stop
+        val act = session.state.value.activity
+        if (act.running || act.queued > 0) throw FlashError("Сначала остановите команду")
+        if (!session.begin(Pm3Ipc.KIND_FLASH, null)) {
+            // Android lets only a visible app start the service, and the download may have outlasted the screen
+            if (!session.isUiVisible) {
+                throw FlashError("Вернитесь в приложение и повторите: прошивку можно начать только когда приложение открыто")
+            }
+            // the reason of a refusal is in the state only when it is a failure of this very attempt
+            val snap = session.state.value
+            throw FlashError(
+                snap.linkDetail.takeIf { snap.link == LinkState.FAILED && it.isNotBlank() }
+                    ?: "Не удалось запустить службу прошивки",
+            )
+        }
         flashing.value = true
         noAutoConnect = false
-        if (!session.begin(Pm3Ipc.KIND_FLASH, null)) {
-            throw FlashError(session.state.value.linkDetail.ifBlank { "Не удалось запустить службу прошивки" })
-        }
+    }
+
+    // Begin(KIND_FLASH) before every pass, after the waits for the user: it brings the service back to the foreground
+    // and renews the lease, whatever happened in the gap. A false answer is not fatal here: the chain is under way,
+    // the service is there, and a refusal of this one is not the write's failure.
+    private fun renewFlashLease() {
+        session.begin(Pm3Ipc.KIND_FLASH, null)
     }
 
     private suspend fun writeWithBootloader(files: List<String>, opts: FlashOptions) {
@@ -463,6 +493,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 throw FlashError("Устройство в режиме DFU (загрузчик МК). Используйте «Восстановление через DFU»")
             }
             ensurePermission(device)
+            renewFlashLease()
             _flash.value = FlashState.Working("Прошивка", "Связь с устройством…")
             val ticker = viewModelScope.launch {
                 while (true) {
@@ -505,6 +536,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val device = usb.findProxmark()?.takeIf { Pm3Ids.isDfu(it) }
             ?: throw FlashError("Устройство не в режиме DFU: зажмите кнопку и подключите кабель")
         ensurePermission(device)
+        renewFlashLease()
         val ticker = viewModelScope.launch {
             while (true) {
                 FlashLog.dfuStatus(session.terminal.snapshot())?.let { (phase, pct) ->
@@ -538,15 +570,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
 
-        ResultCode.BUSY, ResultCode.DROPPED -> throw FlashError("Клиент занят или ещё не запущен, повторите")
+        ResultCode.BUSY -> throw FlashError("Клиент занят: остановите команду и повторите")
+        ResultCode.DROPPED -> throw FlashError("Клиент ещё не запущен, повторите")
         else -> throw FlashError("$what не удалась (код $code), подробности в терминале (панель сверху)")
     }
 
     // The service opens the device itself (the permission is the app's, not the process's): only ask for it here.
+    // The wait is bounded: a dialog nobody answers must end the chain (and its flashEnd), not outlast the lease.
     private suspend fun ensurePermission(device: UsbDevice) {
         if (!usb.hasPermission(device)) {
-            _flash.value = FlashState.Working("Доступ к USB", "Разрешите приложению доступ к устройству")
-            usb.requestPermission(device) ?: throw FlashError("Нет доступа к USB-устройству")
+            _flash.value = FlashState.Working("Доступ к USB", "Разрешите приложению доступ к устройству (ждём до минуты)")
+            when (withTimeoutOrNull(FLASH_USER_WAIT_MS) { usb.requestPermission(device) != null }) {
+                true -> Unit
+                false -> throw FlashError("Нет доступа к USB-устройству")
+                null -> throw FlashError("Нет ответа на запрос доступа к USB за минуту. Повторите и нажмите «Разрешить»")
+            }
         }
     }
 
@@ -565,7 +603,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val device = awaitDevice(used, 15_000) ?: return
         if (!usb.hasPermission(device)) {
             _flash.value = FlashState.Working("Переподключение", "Разрешите доступ к USB, чтобы подключиться к новой прошивке")
-            usb.requestPermission(device)
+            // the write is done: an unanswered dialog only ends the wait, it fails nothing
+            withTimeoutOrNull(FLASH_USER_WAIT_MS) { usb.requestPermission(device) }
         }
     }
 

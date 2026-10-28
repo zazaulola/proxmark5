@@ -1,0 +1,230 @@
+Proxmark3 command dump
+======================
+
+---------------------------------------------------------------------------------------
+hf mf dump               
+available offline: no
+
+Dump MIFARE Classic tag to file (bin/json)
+If no <name> given, UID will be used as filename
+
+usage:
+    hf mf dump [-hv] [-f <fn>] [-k <fn>] [--mini] [--1k] [--2k] [--4k] [--ns] [--sk]
+
+options:
+    -h, --help                     This help
+    -f, --file <fn>                Specify a filename for dump file
+    -k, --keys <fn>                filename of keys
+    --mini                         MIFARE Classic Mini / S20
+    --1k                           MIFARE Classic 1k / S50 (def)
+    --2k                           MIFARE Classic/Plus 2k
+    --4k                           MIFARE Classic 4k / S70
+    --ns                           no save to file
+    -v, --verbose                  verbose output
+    --sk                           Save extracted keys to binary file
+
+examples/notes:
+    hf mf dump --mini                              -> MIFARE Mini
+    hf mf dump --1k                                -> MIFARE Classic 1k
+    hf mf dump --2k                                -> MIFARE 2k
+    hf mf dump --4k                                -> MIFARE 4k
+    hf mf dump --keys hf-mf-066C8B78-key.bin       -> MIFARE 1k with keys from specified file
+                                                  
+
+---------------------------------------------------------------------------------------
+hf mf rdbl               
+available offline: no
+
+Read MIFARE Classic block
+
+usage:
+    hf mf rdbl [-habv] --blk <dec> [-c <dec>] [-k <hex>]
+
+options:
+    -h, --help                     This help
+    --blk <dec>                    block number
+    -a                             input key type is key A (def)
+    -b                             input key type is key B
+    -c <dec>                       input key type is key A + offset
+    -k, --key <hex>                key, 6 hex bytes
+    -v, --verbose                  verbose output
+
+examples/notes:
+    hf mf rdbl --blk 0            
+    hf mf rdbl --blk 0 -k A0A1A2A3A4A5
+    hf mf rdbl --blk 3 -v          -> get block 3, decode sector trailer
+                                  
+
+---------------------------------------------------------------------------------------
+hf felica raw            
+available offline: no
+
+Send raw hex data to tag
+
+usage:
+    hf felica raw  [-hackprs] [-n <dec>] <hex>
+
+options:
+    -h, --help                     This help
+    -a                             active signal field ON without select
+    -c                             calculate and append CRC
+    -k                             keep signal field ON after receive
+    -n <dec>                       number of bits
+    -p, --probe                    report antenna envelope instead of decoding (needs `hw dbg -4`)
+    -r                             do not read response
+    -s                             active signal field ON with select
+    <hex>                          raw bytes to send
+
+examples/notes:
+    hf felica raw -cs 20          
+    hf felica raw -cs 2008        
+    hw dbg -4; hf felica raw -acp 00ffff0000       -> measure antenna envelope, for reading distance
+
+---------------------------------------------------------------------------------------
+hf mfdes auth            
+available offline: no
+
+Select application on the card. It selects app if it is a valid one or returns an error.
+
+usage:
+    hf mfdes auth [-hav] [-n <dec>] [-t <DES|2TDEA|3TDEA|AES>] [-k <hex>] [--kdf <none|AN10922|gallagher>]
+                    [-i <hex>] [-m <plain|mac|encrypt>] [-c <native|niso|iso>] [--schann <d40|ev1|ev2|lrp>]
+                    [--aid <hex>] [--isoid <hex>] [--dfname <hex>] [--save]
+
+options:
+    -h, --help                     This help
+    -a, --apdu                     Show APDU requests and responses
+    -v, --verbose                  Verbose output
+    -n, --keyno <dec>              Key number
+    -t, --algo <DES|2TDEA|3TDEA|AES> Crypt algo
+    -k, --key <hex>                Key for authenticate (8|16|24 hex bytes)
+    --kdf <none|AN10922|gallagher> Key Derivation Function (KDF)
+    -i, --kdfi <hex>               KDF input (1-31 hex bytes)
+    -m, --cmode <plain|mac|encrypt> Communicaton mode
+    -c, --ccset <native|niso|iso>  Communicaton command set
+    --schann <d40|ev1|ev2|lrp>     Secure channel
+    --aid <hex>                    Application ID of application for some parameters (3 hex bytes, big endian)
+    --isoid <hex>                  Application ISO ID (ISO DF ID) (2 hex bytes, big endian)
+    --dfname <hex>                 Application ISO DF Name (5-16 hex bytes, big endian)
+    --save                         saves channels parameters to defaults if authentication succeeds
+
+examples/notes:
+    hf mfdes auth  -n 0 -t des -k 0000000000000000 --kdf none            -> select PICC level and authenticate with key num=0, key type=des, key=00..00 and key derivation = none
+    hf mfdes auth  -n 0 -t aes -k 00000000000000000000000000000000       -> select PICC level and authenticate with key num=0, key type=aes, key=00..00 and key derivation = none
+    hf mfdes auth  -n 0 -t des -k 0000000000000000 --save                -> select PICC level and authenticate and in case of successful authentication - save channel parameters to defaults
+    hf mfdes auth --aid 123456         -> select application 123456 and authenticate via parameters from `default` command
+    hf mfdes auth --dfname D2760000850100 -n 0 -t aes -k 00000000000000000000000000000000      -> select DF by name and authenticate
+
+---------------------------------------------------------------------------------------
+hw tune                  
+available offline: no
+
+Measure tuning of device antenna. Results shown in graph window.
+This command doesn't actively tune your antennas, 
+it's only informative by measuring voltage that the antennas will generate
+
+usage:
+    hw tune [-h]
+
+options:
+    -h, --help                     This help
+
+examples/notes:
+    hw tune                       
+
+---------------------------------------------------------------------------------------
+data fft                 
+available offline: yes
+
+Fourier transform of the samples in the GraphBuffer.
+Reports the magnitude spectrum of the first N/2+1 bins, the input being real.
+The DC component is removed and the window is normalised to unit variance
+before the transform, so magnitudes are comparable between captures.
+
+usage:
+    data fft [-h] [--start <int>] [--size <int>] [--win <hann|hamming|blackman|rect>] [--db]
+                    [--graph] [--fs <int>] [--bins <int>]
+
+options:
+    -h, --help                     This help
+    --start <int>                  first sample of the GraphBuffer to use (def 0)
+    --size <int>                   transform length, rounded up to a power of two (def largest that fits)
+    --win <hann|hamming|blackman|rect> window function (def hann)
+    --db                           report magnitude in dB relative to the peak bin instead of linear
+    --graph                        write the magnitude spectrum into the GraphBuffer and repaint
+    --fs <int>                     sample rate in Hz, adds a frequency column in Hz
+    --bins <int>                   how many bins to print (def 32, 0 for all)
+
+examples/notes:
+    data fft                                          -> transform the whole buffer
+    data fft --size 4096 --win blackman               -> 4096 point transform, blackman window
+    data fft --start 1000 --size 8192 --db            -> magnitudes in dB relative to the peak
+    data fft --size 4096 --graph                      -> put the spectrum in the graph window
+                                                     
+
+---------------------------------------------------------------------------------------
+hf ksx6924 init          
+available offline: no
+
+Perform transaction initialization with Mpda (Money of Purchase Transaction)
+
+usage:
+    hf ksx6924 init [-hka] <Mpda 4 bytes hex>
+
+options:
+    -h, --help                     This help
+    -k, --keep                     keep field ON for next command
+    -a, --apdu                     Show APDU requests and responses
+
+examples/notes:
+    hf ksx6924 init 000003e8       -> Mpda
+                                  
+
+---------------------------------------------------------------------------------------
+hf 14a config            
+available offline: no
+---------------------------------------------------------------------------------------
+lf t55xx write           
+available offline: no
+
+Write T55xx block data
+
+usage:
+    lf t55xx write [-ht] -b <0-7> [-d <hex>] [-p <hex>] [--pg1] [--verify] [--r0] [--r1] [--r2] [--r3]
+
+options:
+    -h, --help                     This help
+    -b, --blk <0-7>                block number to write
+    -d, --data <hex>               data to write (4 hex bytes)
+    -p, --pwd <hex>                password (4 hex bytes)
+    -t, --tm                       test mode write ( [31mdanger[0m )
+    --pg1                          write page 1
+    --verify                       try validate data afterward
+    --r0                           downlink - fixed bit length (detected def)
+    --r1                           downlink - long leading reference 
+    --r2                           downlink - leading zero 
+    --r3                           downlink - 1 of 4 coding reference 
+
+examples/notes:
+    lf t55xx write -b 3 -d 11223344                               -> write 11223344 to block 3
+    lf t55xx write -b 3 -d 11223344 --pwd 01020304                -> write 11223344 to block 3, pwd 01020304
+    lf t55xx write -b 3 -d 11223344 --pwd 01020304 --verify       -> write 11223344 to block 3 and try validating write
+
+---------------------------------------------------------------------------------------
+hf 14a sniff             
+available offline: no
+
+Sniff the communication between reader and tag
+Use `hf 14a list` to view collected data.
+
+usage:
+    hf 14a sniff [-hcri]
+
+options:
+    -h, --help                     This help
+    -c, --card                     triggered by first data from card
+    -r, --reader                   triggered by first 7-bit request from reader (REQ, WUP)
+    -i, --interactive              Console will not be returned until sniff finishes or is aborted
+
+examples/notes:
+     hf 14a sniff -c -r           

@@ -220,11 +220,12 @@ private fun TagChip(tag: ParamTag, problem: Problem?, onTap: () -> Unit, onRemov
         spec == null -> ""
         spec.isFlag -> ""
         else -> Values.normalize(spec.type, tag.value).let { v ->
+            val type = spec.type // a property of another module: no smart cast on it
             when {
                 v.isEmpty() -> "?"
-                spec.type is ValueType.Hex && !spec.type.asInteger -> TagText.middle(TagText.groupBytes(v), 28)
+                type is ValueType.Hex && !type.asInteger -> TagText.middle(TagText.groupBytes(v), 28)
                 // a picked file goes as a full path; its name is what tells it apart
-                spec.type is ValueType.File -> TagText.middle(v.substringAfterLast('/').ifEmpty { v }, 28)
+                type is ValueType.File -> TagText.middle(v.substringAfterLast('/').ifEmpty { v }, 28)
                 else -> TagText.middle(v, 28)
             }
         }

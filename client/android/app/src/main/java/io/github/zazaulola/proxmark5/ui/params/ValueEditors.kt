@@ -101,8 +101,7 @@ internal fun typeText(type: ValueType): String = when (type) {
     }
     is ValueType.Hex -> when {
         type.asInteger -> "число в hex"
-        type.exact != null -> "hex, ${type.exact.describe()} байт"
-        else -> "hex"
+        else -> type.exact?.let { "hex, ${it.describe()} байт" } ?: "hex"
     }
     ValueType.Bits -> "биты, 0 и 1"
     is ValueType.File -> when (type.role) {
@@ -383,7 +382,7 @@ private fun NumberEditor(
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (integer) IconButton(onClick = { step(-1) }) { Icon(Icons.Filled.Remove, contentDescription = "Меньше на 1") }
-            val negative = type.min != null && type.min < 0
+            val negative = (type.min ?: 0) < 0
             ValueField(
                 value = field,
                 onValueChange = { tfv ->

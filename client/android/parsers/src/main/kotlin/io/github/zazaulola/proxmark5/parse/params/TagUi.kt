@@ -84,33 +84,47 @@ object TagText {
 
 /**
  * Drafts saved across the death of the UI process (Android keeps these strings for the
- * activity). A tag is saved by its parameter's key, so it can be matched to the help again.
+ * activity). A tag is saved by its parameter's key, so it can be matched to the help again, and
+ * with its id, which the screen also saves (the tag whose editor is open).
  */
 object DraftCodec {
     private const val SEP = '\u0000'
 
     fun encode(draft: CommandDraft): ArrayList<String> = ArrayList(draft.tags.map { t ->
-        if (t.spec != null) "k$SEP${t.spec.key}$SEP${t.value}" else "r$SEP${t.raw.orEmpty()}"
+        if (t.spec != null) "k$SEP${t.id}$SEP${t.spec.key}$SEP${t.value}" else "r$SEP${t.id}$SEP${t.raw.orEmpty()}"
     })
 
     /** Rebuilds a draft of [command] against [specs]; a tag whose parameter is gone becomes raw text. */
     fun decode(command: String, saved: List<String>, specs: List<ParamSpec>): CommandDraft {
-        var d = CommandDraft(command, emptyList())
+        val tags = ArrayList<ParamTag>()
+        val used = HashSet<Long>()
+        var fresh = (saved.mapNotNull { it.split(SEP).getOrNull(1)?.toLongOrNull() }.maxOrNull() ?: 0L) + 1
+        fun id(text: String): Long {
+            val n = text.toLongOrNull()
+            return if (n != null && n > 0 && used.add(n)) n else fresh++.also { used.add(it) }
+        }
         for (row in saved) {
-            val parts = row.split(SEP)
-            d = when {
-                parts[0] == "k" && parts.size >= 3 -> {
-                    val spec = specs.firstOrNull { it.key == parts[1] }
+            val kind = row.substringBefore(SEP)
+            when (kind) {
+                "k" -> {
+                    val parts = row.split(SEP, limit = 4)
+                    if (parts.size < 4) continue
+                    val spec = specs.firstOrNull { it.key == parts[2] }
                     when {
-                        spec != null -> d.add(spec, parts[2])
-                        parts[2].isEmpty() -> d.addRaw(parts[1])
-                        else -> d.addRaw(parts[1]).addRaw(parts[2])
+                        spec != null -> tags += ParamTag(id(parts[1]), spec, parts[3])
+                        parts[3].isEmpty() -> tags += ParamTag(id(parts[1]), null, "", parts[2])
+                        else -> {
+                            tags += ParamTag(id(parts[1]), null, "", parts[2])
+                            tags += ParamTag(fresh++, null, "", parts[3])
+                        }
                     }
                 }
-                parts[0] == "r" && parts.size >= 2 -> d.addRaw(parts[1])
-                else -> d
+                "r" -> {
+                    val parts = row.split(SEP, limit = 3)
+                    if (parts.size == 3) tags += ParamTag(id(parts[1]), null, "", parts[2])
+                }
             }
         }
-        return d
+        return CommandDraft(command, tags)
     }
 }

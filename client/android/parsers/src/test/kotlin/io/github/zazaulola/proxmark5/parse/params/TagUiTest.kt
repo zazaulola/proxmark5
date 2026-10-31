@@ -61,9 +61,29 @@ class TagUiTest {
             .add(specs.first { it.short == "-k" }, "FFFFFFFFFFFF").addRaw("--gone")
         val back = DraftCodec.decode("hf mf rdbl", DraftCodec.encode(d), specs)
         assertEquals(CommandLine.build(d), CommandLine.build(back))
+        assertEquals(d.tags.map { it.id }, back.tags.map { it.id })
         // a parameter the help no longer has comes back as raw text
         val fewer = DraftCodec.decode("hf mf rdbl", DraftCodec.encode(d), specs.filter { it.short != "-k" })
         assertEquals("hf mf rdbl --blk 4 --key FFFFFFFFFFFF --gone", CommandLine.build(fewer))
+    }
+
+    @Test
+    fun savedDraftKeepsTagIdsAfterRemovalsAndMoves() {
+        // the screen saves "the editor of tag N is open": N must name the same tag after a restore
+        val help = assertNotNull(
+            HelpText.parseDump(checkNotNull(javaClass.getResource("/help/params-dump.txt")).readText())["hf mf rdbl"],
+        )
+        val specs = ParamSpecs.of("hf mf rdbl", help)
+        var d = CommandDraft("hf mf rdbl", emptyList())
+            .add(specs.first { it.long == "--blk" }, "1")
+            .add(specs.first { it.short == "-k" }, "FFFFFFFFFFFF")
+            .addRaw("--odd")
+        d = d.remove(d.tags[0].id).move(d.tags[2].id, 0)
+        val back = DraftCodec.decode("hf mf rdbl", DraftCodec.encode(d), specs)
+        assertEquals(d.tags, back.tags)
+        // new tags after the restore do not take a saved id
+        val added = back.add(specs.first { it.long == "--blk" }, "2")
+        assertEquals(added.tags.size, added.tags.map { it.id }.toSet().size)
     }
 
     @Test

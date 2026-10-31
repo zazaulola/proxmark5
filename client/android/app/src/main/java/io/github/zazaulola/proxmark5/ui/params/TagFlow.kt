@@ -99,12 +99,15 @@ fun TagFlow(
     var dragging by remember { mutableStateOf<Long?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var frozen by remember { mutableStateOf<List<TagBox>>(emptyList()) }
+    // the tags the frozen boxes belong to: a drop is applied only to that same list
+    var frozenIds by remember { mutableStateOf<List<Long>>(emptyList()) }
     var slot by remember { mutableStateOf<Int?>(null) }
 
     fun endDrag(commit: Boolean) {
         val id = dragging
         val s = slot
-        if (commit && id != null && s != null) {
+        // the list changed under the finger (a removal, an undo): the slot belongs to the old one
+        if (commit && id != null && s != null && current.map { it.id } == frozenIds) {
             val from = current.indexOfFirst { it.id == id }
             if (from >= 0) {
                 val to = Reorder.target(from, s)
@@ -129,7 +132,7 @@ fun TagFlow(
                         problem = problems[tag.id],
                         // a long press lets go with an up the tap would also take: no editor then
                         onTap = { if (dragging == null) onEdit(tag) },
-                        onRemove = { onRemove(tag) },
+                        onRemove = { if (dragging == null) onRemove(tag) },
                         modifier = Modifier
                             .onGloballyPositioned { c ->
                                 if (dragging == null) {
@@ -138,20 +141,13 @@ fun TagFlow(
                                 }
                             }
                             .zIndex(if (lifted) 1f else 0f)
-                            .graphicsLayer {
-                                if (lifted) {
-                                    translationX = dragOffset.x
-                                    translationY = dragOffset.y
-                                    scaleX = 1.05f
-                                    scaleY = 1.05f
-                                    shadowElevation = 8.dp.toPx()
-                                }
-                            }
+                            // outside the lifted layer: drag amounts are the finger's, not scaled by it
                             .pointerInput(tag.id) {
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = {
                                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                         frozen = current.mapNotNull { bounds[it.id] }
+                                        frozenIds = current.map { it.id }
                                         dragging = tag.id
                                         dragOffset = Offset.Zero
                                         slot = null
@@ -170,6 +166,15 @@ fun TagFlow(
                                     onDragEnd = { endDrag(commit = true) },
                                     onDragCancel = { endDrag(commit = false) },
                                 )
+                            }
+                            .graphicsLayer {
+                                if (lifted) {
+                                    translationX = dragOffset.x
+                                    translationY = dragOffset.y
+                                    scaleX = 1.05f
+                                    scaleY = 1.05f
+                                    shadowElevation = 8.dp.toPx()
+                                }
                             }
                             .semantics {
                                 customActions = listOfNotNull(

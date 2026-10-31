@@ -79,6 +79,7 @@ import io.github.zazaulola.proxmark5.parse.params.TagText
 import io.github.zazaulola.proxmark5.parse.params.ValueType
 import io.github.zazaulola.proxmark5.parse.params.Values
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -305,6 +306,30 @@ private fun filtered(tfv: TextFieldValue, keep: (String) -> String): TextFieldVa
     return TextFieldValue(text, TextRange(cursor))
 }
 
+/**
+ * [new] after an edit of the hex field that held [old] (already clean): only the inserted part is
+ * cleaned, so a `0x` pasted after digits goes away whole instead of leaving its `0` behind.
+ */
+private fun hexEdit(old: TextFieldValue, new: TextFieldValue): TextFieldValue {
+    val a = old.text
+    val b = new.text
+    if (a == b) return new // the cursor or the selection moved: keep them as they are
+    // the edit is what lies between the part of the old text kept in front and the part kept
+    // behind; what follows the cursor is normally the old text's end
+    val cur = new.selection.end.coerceIn(0, b.length)
+    var suf = b.length - cur
+    if (suf > a.length || !a.endsWith(b.substring(cur))) {
+        suf = 0
+        while (suf < a.length && suf < b.length && a[a.length - 1 - suf] == b[b.length - 1 - suf]) suf++
+    }
+    val limit = minOf(a.length - suf, b.length - suf)
+    var pre = 0
+    while (pre < limit && a[pre] == b[pre]) pre++
+    val inserted = TagText.cleanHex(b.substring(pre, b.length - suf))
+    val text = a.substring(0, pre) + inserted + a.substring(a.length - suf)
+    return TextFieldValue(text, TextRange((pre + inserted.length).coerceIn(0, text.length)))
+}
+
 private fun convertNumber(text: String, toHex: Boolean): String {
     val t = text.trim()
     return if (toHex) {
@@ -388,7 +413,7 @@ private fun NumberEditor(
                 onValueChange = { tfv ->
                     onField(
                         if (inHex) {
-                            filtered(tfv, TagText::cleanHex)
+                            hexEdit(field, tfv)
                         } else {
                             filtered(tfv) { s -> s.filter { it.isDigit() || it == '-' || (type.fraction && (it == '.' || it == ',')) } }
                         },
@@ -443,7 +468,7 @@ private fun HexEditor(
     }
     ValueField(
         value = field,
-        onValueChange = { if (asText) onField(it) else onField(filtered(it, TagText::cleanHex)) },
+        onValueChange = { if (asText) onField(it) else onField(hexEdit(field, it)) },
         focus = focus,
         onDone = onDone,
         keyboard = KeyboardType.Ascii,
@@ -552,11 +577,12 @@ private fun FileEditor(
         if (uri != null) {
             scope.launch {
                 importNote = "Копирую…"
-                val r = withContext(Dispatchers.IO) { runCatching { importFile(context, uri, places.dumps) } }
+                // closing the dialog cancels this: the copy then stops and its file goes
+                val r = withContext(Dispatchers.IO) { runCatching { importFile(context, uri, places.dumps) { isActive } } }
                 r.onSuccess { f ->
                     importNote = "Скопирован в папку дампов: ${f.name}"
                     onField(TextFieldValue(f.path, TextRange(f.path.length)))
-                    shelf = if (Library.classify(f.name) == LibraryKind.KEYS) Shelf.KEYS else Shelf.DUMPS
+                    shelf = shelfOf(f)
                     reload++
                 }.onFailure { importNote = "Не удалось взять файл: ${it.message ?: it.javaClass.simpleName}" }
             }
@@ -609,20 +635,21 @@ private fun listShelf(places: FilePlaces, shelf: Shelf): List<File> = when (shel
         ?.filter { it.isFile && !it.name.startsWith(".") }
         ?.sortedBy { it.name.lowercase() }
         .orEmpty()
-    Shelf.DUMPS, Shelf.KEYS -> {
-        val kind = if (shelf == Shelf.KEYS) LibraryKind.KEYS else LibraryKind.DUMPS
-        places.dumps.listFiles()
-            ?.filter { it.isFile && !it.name.startsWith(".") && Library.classify(it.name) == kind }
-            ?.sortedByDescending { it.lastModified() }
-            .orEmpty()
-    }
+    // everything of the dump folder: the client also saves traces and logs there, which some
+    // commands load (`trace load -f`)
+    Shelf.DUMPS, Shelf.KEYS -> places.dumps.listFiles()
+        ?.filter { it.isFile && !it.name.startsWith(".") && shelfOf(it) == shelf }
+        ?.sortedByDescending { it.lastModified() }
+        .orEmpty()
 }
+
+private fun shelfOf(f: File): Shelf = if (Library.classify(f.name) == LibraryKind.KEYS) Shelf.KEYS else Shelf.DUMPS
 
 /**
  * Copies [uri] into [dir] under its own name made safe for a command line (no spaces or
  * quotes), with -1, -2... added when that name is taken, and returns the copy.
  */
-private fun importFile(context: Context, uri: Uri, dir: File): File {
+private fun importFile(context: Context, uri: Uri, dir: File, alive: () -> Boolean): File {
     val shown = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
         if (c.moveToFirst()) c.getString(0) else null
     }
@@ -641,6 +668,7 @@ private fun importFile(context: Context, uri: Uri, dir: File): File {
                 val buf = ByteArray(64 * 1024)
                 var total = 0L
                 while (true) {
+                    if (!alive()) throw IOException("отменено")
                     val n = src.read(buf)
                     if (n < 0) break
                     total += n
@@ -649,6 +677,7 @@ private fun importFile(context: Context, uri: Uri, dir: File): File {
                 }
             }
         }
+        if (!alive()) throw IOException("отменено")
     } catch (e: Exception) {
         target.delete()
         throw e

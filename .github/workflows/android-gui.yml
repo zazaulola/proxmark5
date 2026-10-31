@@ -4,7 +4,8 @@ name: Android GUI
 # development can't fetch the Android SDK, so the APK is built here, where the
 # SDK and NDK are available. Artifact: an installable debug APK.
 # The APK also bundles PM5 firmware built from this same tree, so the app can always
-# flash a firmware that matches its client, even offline.
+# flash a firmware that matches its client, even offline, and the help of every client
+# command, from which the parameter editor builds its forms.
 
 on:
   push:
@@ -105,9 +106,28 @@ jobs:
                 > "$RUNNER_TEMP/pm5-firmware/firmware.json"
           cat "$RUNNER_TEMP/pm5-firmware/firmware.json"
 
+      # The parameter editor builds its forms from the help of every command: dump it from a host
+      # build of the client of this same tree (no device needed) and ship it as assets/pm3-help
+      - name: Dump the help of the client's commands
+        run: |
+          sudo apt-get install -yqq pkg-config libreadline-dev libbz2-dev liblz4-dev
+          make -j$((`nproc` + 1)) client SKIPQT=1 SKIPBT=1 SKIPPYTHON=1 SKIPGD=1
+          mkdir -p "$RUNNER_TEMP/pm3-home"
+          HOME="$RUNNER_TEMP/pm3-home" client/proxmark3 --fulltext > "$RUNNER_TEMP/pm3-help.txt"
+          n=$(grep -c '^-\{40,\}$' "$RUNNER_TEMP/pm3-help.txt" || true)
+          echo "commands in the dump: $n"
+          [ "$n" -gt 900 ] || { echo "::error::the help dump has only $n commands"; exit 1; }
+
+      # every example the help gives must read into known parameters and build back the same line
+      - name: Check the editor reads the whole help
+        working-directory: client/android
+        env:
+          PM3_HELP_DUMP: ${{ runner.temp }}/pm3-help.txt
+        run: ./gradlew -Pparsers.only :parsers:test --tests '*FullDumpTest*' --no-daemon --console=plain
+
       - name: Build APK
         working-directory: client/android
-        run: ./gradlew :app:assembleDebug --no-daemon --console=plain -Ppm3.ndkVersion=${NDK_VERSION} -Ppm3.firmwareDir=$RUNNER_TEMP/pm5-firmware
+        run: ./gradlew :app:assembleDebug --no-daemon --console=plain -Ppm3.ndkVersion=${NDK_VERSION} -Ppm3.firmwareDir=$RUNNER_TEMP/pm5-firmware -Ppm3.helpDump=$RUNNER_TEMP/pm3-help.txt
 
       - name: Collect APK
         run: |
@@ -119,7 +139,7 @@ jobs:
       - name: Check the APK carries the client resources
         run: |
           unzip -l out/proxmark5-debug.apk > "$RUNNER_TEMP/apk-files.txt"
-          for f in assets/pm3/resources/hardnested_tables/ assets/pm3/dictionaries/mfc_default_keys.dic; do
+          for f in assets/pm3/resources/hardnested_tables/ assets/pm3/dictionaries/mfc_default_keys.dic assets/pm3-help/fulltext.txt; do
             grep -qF "$f" "$RUNNER_TEMP/apk-files.txt" || { echo "::error::the APK has no $f"; exit 1; }
           done
 

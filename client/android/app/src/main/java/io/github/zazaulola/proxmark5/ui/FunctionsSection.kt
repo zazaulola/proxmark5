@@ -10,22 +10,21 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,10 +32,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,12 +46,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.zazaulola.proxmark5.parse.CommandNode
 import io.github.zazaulola.proxmark5.parse.CommandTree
+import io.github.zazaulola.proxmark5.ui.params.CommandScreen
 
 // The groups of the Functions section, in the order they are shown.
 private val GROUP_ORDER = listOf(
@@ -67,8 +64,9 @@ private val HIDDEN = setOf("quit", "exit")
 
 /**
  * Everything the client can do, as the tree it has itself: the groups (prefs, analyse, data,
- * hw, emv, hf, lf, ...) and, inside them, the commands. A command runs in the living session;
- * its output streams to the terminal and the Status screen follows it.
+ * hw, emv, hf, lf, ...) and, inside them, the commands. A command opens its own screen, where
+ * its parameters are put together as tags from its help and the line is sent to the living
+ * session; its output streams to the terminal and the Status screen follows it.
  */
 @Composable
 fun FunctionsSection(vm: AppViewModel) {
@@ -76,33 +74,41 @@ fun FunctionsSection(vm: AppViewModel) {
 
     var path by rememberSaveable { mutableStateOf("") } // "hf mf", or "" for the top
     var query by rememberSaveable { mutableStateOf("") }
-    var open by rememberSaveable { mutableStateOf<String?>(null) } // line of the command whose runner is open
-
+    var open by rememberSaveable { mutableStateOf<String?>(null) } // line of the command whose screen is open
     val names = if (path.isEmpty()) emptyList() else path.split(' ')
     val root = tree
 
-    BackHandler(enabled = query.isNotEmpty() || path.isNotEmpty()) {
-        if (query.isNotEmpty()) {
-            query = ""
-            open = null
-        } else {
-            path = path.substringBeforeLast(' ', "")
-            open = null
+    // kept here, so coming back from a command finds the list where it was left
+    val homeGrid = rememberLazyGridState()
+    val groupList = rememberSaveable(path, saver = LazyListState.Saver) { LazyListState() }
+    val foundList = rememberSaveable(query, saver = LazyListState.Saver) { LazyListState() }
+
+    // Back: out of a command first, then out of the search, then up a level
+    BackHandler(enabled = open != null || query.isNotEmpty() || path.isNotEmpty()) {
+        when {
+            open != null -> open = null
+            query.isNotEmpty() -> query = ""
+            else -> path = path.substringBeforeLast(' ', "")
         }
+    }
+
+    val command = open?.let { line -> root?.find(line.split(' ')) }?.takeIf { !it.isGroup }
+    if (command != null) {
+        CommandScreen(vm, command, onBack = { open = null })
+        return
     }
 
     Column(Modifier.fillMaxSize()) {
         OutlinedTextField(
             value = query,
-            // the runner that was open belongs to the list that was on screen: close it with the list
-            onValueChange = { query = it; open = null },
+            onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             singleLine = true,
             placeholder = { Text("Поиск команды, напр. mf dump") },
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
-                    IconButton(onClick = { query = ""; open = null }) {
+                    IconButton(onClick = { query = "" }) {
                         Icon(Icons.Filled.Clear, contentDescription = "Очистить поиск")
                     }
                 }
@@ -124,23 +130,22 @@ fun FunctionsSection(vm: AppViewModel) {
                 }
             }
 
-            query.isNotBlank() -> SearchResults(vm, root, query, open, onOpen = { open = if (open == it) null else it })
+            query.isNotBlank() -> SearchResults(root, query, foundList, onOpen = { open = it })
 
             group == null || names.isEmpty() -> FunctionsHome(
                 vm = vm,
                 root = root,
-                open = open,
-                onOpenGroup = { path = it.line; open = null },
-                onToggleLeaf = { open = if (open == it) null else it },
+                state = homeGrid,
+                onOpenGroup = { path = it.line },
+                onOpenCommand = { open = it },
             )
 
             else -> GroupBrowser(
-                vm = vm,
                 group = group,
-                open = open,
-                onUp = { path = path.substringBeforeLast(' ', ""); open = null },
-                onOpenGroup = { path = it.line; open = null },
-                onToggleLeaf = { open = if (open == it) null else it },
+                state = groupList,
+                onUp = { path = path.substringBeforeLast(' ', "") },
+                onOpenGroup = { path = it.line },
+                onOpenCommand = { open = it },
             )
         }
     }
@@ -150,19 +155,17 @@ fun FunctionsSection(vm: AppViewModel) {
 private fun FunctionsHome(
     vm: AppViewModel,
     root: CommandNode,
-    open: String?,
+    state: LazyGridState,
     onOpenGroup: (CommandNode) -> Unit,
-    onToggleLeaf: (String) -> Unit,
+    onOpenCommand: (String) -> Unit,
 ) {
     val byName = root.children.associateBy { it.name }
     val main = GROUP_ORDER.mapNotNull { byName[it] }
     val rest = root.children.filter { it.name !in GROUP_ORDER && it.name !in HIDDEN }
-    // a top-level command that is not a group (reveng, clear, ...) opens its runner in a dialog,
-    // so it shows wherever on the screen its tile is
-    val openLeaf = open?.let { root.child(it) }?.takeIf { !it.isGroup }
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(150.dp),
+        state = state,
         contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -172,25 +175,16 @@ private fun FunctionsHome(
             Text("Группы команд", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
         }
         items(main, key = { it.name }) { node ->
-            GroupTile(node) { if (node.isGroup) onOpenGroup(node) else onToggleLeaf(node.line) }
+            GroupTile(node) { if (node.isGroup) onOpenGroup(node) else onOpenCommand(node.line) }
         }
         if (rest.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("Прочее", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
             }
             items(rest, key = { it.name }) { node ->
-                GroupTile(node) { if (node.isGroup) onOpenGroup(node) else onToggleLeaf(node.line) }
+                GroupTile(node) { if (node.isGroup) onOpenGroup(node) else onOpenCommand(node.line) }
             }
         }
-    }
-
-    if (openLeaf != null) {
-        AlertDialog(
-            onDismissRequest = { onToggleLeaf(openLeaf.line) },
-            confirmButton = { TextButton(onClick = { onToggleLeaf(openLeaf.line) }) { Text("Закрыть") } },
-            title = { Text(openLeaf.line, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace) },
-            text = { CommandRunner(vm, openLeaf, onSent = { onToggleLeaf(openLeaf.line) }) },
-        )
     }
 }
 
@@ -219,12 +213,11 @@ private fun GroupTile(node: CommandNode, onClick: () -> Unit) {
 
 @Composable
 private fun GroupBrowser(
-    vm: AppViewModel,
     group: CommandNode,
-    open: String?,
+    state: LazyListState,
     onUp: () -> Unit,
     onOpenGroup: (CommandNode) -> Unit,
-    onToggleLeaf: (String) -> Unit,
+    onOpenCommand: (String) -> Unit,
 ) {
     // subgroups first, then commands, each in the client's own order
     val children = group.children.sortedBy { if (it.isGroup) 0 else 1 }
@@ -240,12 +233,12 @@ private fun GroupBrowser(
             }
         }
         HorizontalDivider()
-        LazyColumn(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), state = state) {
             items(children, key = { it.line }) { node ->
                 if (node.isGroup) {
                     GroupRow(node) { onOpenGroup(node) }
                 } else {
-                    CommandRow(vm, node, label = node.name, isOpen = open == node.line) { onToggleLeaf(node.line) }
+                    CommandRow(node, label = node.name) { onOpenCommand(node.line) }
                 }
             }
         }
@@ -253,7 +246,7 @@ private fun GroupBrowser(
 }
 
 @Composable
-private fun SearchResults(vm: AppViewModel, root: CommandNode, query: String, open: String?, onOpen: (String) -> Unit) {
+private fun SearchResults(root: CommandNode, query: String, state: LazyListState, onOpen: (String) -> Unit) {
     val found = remember(root, query) { CommandTree.search(root, query).filter { it.line !in HIDDEN } }
     if (found.isEmpty()) {
         Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.TopCenter) {
@@ -261,9 +254,9 @@ private fun SearchResults(vm: AppViewModel, root: CommandNode, query: String, op
         }
         return
     }
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize(), state = state) {
         items(found, key = { it.line }) { node ->
-            CommandRow(vm, node, label = node.line, isOpen = open == node.line) { onOpen(node.line) }
+            CommandRow(node, label = node.line) { onOpen(node.line) }
         }
     }
 }
@@ -287,7 +280,6 @@ private fun GroupRow(node: CommandNode, onClick: () -> Unit) {
                     Text(node.help, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            // a group opens sideways, unlike a command, which opens in place
             Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         HorizontalDivider()
@@ -295,11 +287,11 @@ private fun GroupRow(node: CommandNode, onClick: () -> Unit) {
 }
 
 @Composable
-private fun CommandRow(vm: AppViewModel, node: CommandNode, label: String, isOpen: Boolean, onToggle: () -> Unit) {
+private fun CommandRow(node: CommandNode, label: String, onOpen: () -> Unit) {
     val nameColor = if (node.available) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
     Column {
         Row(
-            Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 16.dp, vertical = 10.dp),
+            Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -308,80 +300,8 @@ private fun CommandRow(vm: AppViewModel, node: CommandNode, label: String, isOpe
                     Text(node.help, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Icon(
-                if (isOpen) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (isOpen) {
-            Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp)) { CommandRunner(vm, node) }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         HorizontalDivider()
-    }
-}
-
-/**
- * Parameters and the buttons that send the command to the session. [onSent] runs after a
- * command went out, for a runner that should close itself (the dialog).
- */
-@Composable
-private fun CommandRunner(vm: AppViewModel, node: CommandNode, onSent: (() -> Unit)? = null) {
-    var args by rememberSaveable(node.line) { mutableStateOf("") }
-    var sent by remember(node.line) { mutableStateOf(false) }
-    val connected = vm.connection.collectAsStateWithLifecycle().value is Connection.Connected
-
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = args,
-            onValueChange = { args = it },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            label = { Text("Параметры") },
-            prefix = { Text(node.line + " ", fontFamily = FontFamily.Monospace) },
-            textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-            // arguments, hex included: no capitals, no autocorrect, plain ASCII keys
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Ascii,
-                imeAction = ImeAction.Done,
-            ),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = {
-                    vm.runCommand("${node.line} ${args}")
-                    sent = true
-                    onSent?.invoke()
-                },
-                enabled = node.available,
-            ) { Text("Запустить") }
-            // the client answers -h for any command, available or not
-            OutlinedButton(
-                onClick = {
-                    vm.runCommand("${node.line} -h")
-                    sent = true
-                    onSent?.invoke()
-                },
-            ) { Text("Справка") }
-        }
-        if (!node.available) {
-            Text(
-                if (connected) {
-                    "Недоступна: это устройство или его прошивка не поддерживает команду."
-                } else {
-                    "Сейчас недоступна: нужен подключённый Proxmark."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else if (sent) {
-            Text(
-                "Отправлено в сессию — вывод в терминале сверху, ход на Device → Status.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
 }

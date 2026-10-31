@@ -60,7 +60,7 @@ android {
     }
 
     // client resources (dictionaries, lua, json) staged into assets, see stageClientResources,
-    // and the bundled firmware, see stageFirmware
+    // the bundled firmware, see stageFirmware, and the commands' help, see stageHelp
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("pm3-assets"))
 
     compileOptions {
@@ -140,6 +140,19 @@ val stageFirmware by tasks.registering(Sync::class) {
     }
 }
 
+// The help of every client command, `proxmark3 --fulltext` from a host build of this same tree
+// (CI passes -Ppm3.helpDump=<file>), shipped as assets/pm3-help/fulltext.txt: the parameter editor
+// of the Functions section builds its forms from it. Read in the UI process, not asked of the
+// live client, whose queue runs one command at a time. Without the property the APK has no dump
+// and the editor falls back to editing the line as text.
+val helpDump: String? = providers.gradleProperty("pm3.helpDump").orNull
+val stageHelp by tasks.registering(Sync::class) {
+    into(layout.buildDirectory.dir("pm3-assets/pm3-help"))
+    if (helpDump != null) {
+        from(file(helpDump)) { rename { "fulltext.txt" } }
+    }
+}
+
 tasks.named("preBuild") {
-    dependsOn(stageClientResources, stageFirmware)
+    dependsOn(stageClientResources, stageFirmware, stageHelp)
 }

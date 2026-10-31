@@ -1,0 +1,1083 @@
+banner
+---------------------------------------------------------------------------------------
+analyse units            
+available offline: yes
+
+experiments of unit conversions found in HF. ETU (1/13.56mhz), US or SSP_CLK (1/3.39MHz)
+
+usage:
+    analyse units [-ht] [--etu <dec>] [--us <dec>]
+
+options:
+    -h, --help                     This help
+    --etu <dec>                    number in ETU
+    --us <dec>                     number in micro seconds (us)
+    -t, --selftest                 self tests
+
+examples/notes:
+    analyse uints --etu 10        
+    analyse uints --us 100        
+                                  
+
+
+
+=======================================================================================
+data
+
+ { Plot window / data buffer manipulation... }
+---------------------------------------------------------------------------------------
+data load                
+available offline: yes
+
+This command loads the contents of a pm3 file into graph window
+
+
+usage:
+    data load [-hbn] -f <fn>
+
+options:
+    -h, --help                     This help
+    -f, --file <fn>                file to load
+    -b, --bin                      binary file
+    -n, --no-fix                   Load data from file without any transformations
+
+examples/notes:
+    data load -f myfilename       
+---------------------------------------------------------------------------------------
+data num                 
+available offline: yes
+
+Function takes a decimal or hexdecimal number and print it in decimal/hex/binary
+Will print message if number is a prime number
+
+
+usage:
+    data num [-hir] [--dec <dec>] [--hex <hex>] [--bin <bin>]
+
+options:
+    -h, --help                     This help
+    --dec <dec>                    decimal value
+    --hex <hex>                    hexadecimal value
+    --bin <bin>                    binary value
+    -i                             print inverted value
+    -r                             print reversed value
+
+examples/notes:
+    data num --dec 2023           
+    data num --hex 2A             
+                                  
+---------------------------------------------------------------------------------------
+data rawdemod            
+available offline: yes
+
+Demodulate the data in the GraphBuffer and output binary
+
+usage:
+    data rawdemod [-h] [--ab] [--am] [--ar] [--fs] [--nr] [--p1] [--p2] [<params>]...
+
+options:
+    -h, --help                     This help
+    --ab                           ASK/Biphase demodulation
+    --am                           ASK/Manchester demodulation
+    --ar                           ASK/Raw demodulation
+    --fs                           FSK demodulation
+    --nr                           NRZ/Direct demodulation
+    --p1                           PSK 1 demodulation
+    --p2                           PSK 2 demodulation
+    <params>                       params for sub command
+
+examples/notes:
+    data rawdemod --fs             -> demod FSK - autodetect
+    data rawdemod --ab             -> demod ASK/BIPHASE - autodetect
+    data rawdemod --am             -> demod ASK/MANCHESTER - autodetect
+    data rawdemod --ar             -> demod ASK/RAW - autodetect
+    data rawdemod --nr             -> demod NRZ/DIRECT - autodetect
+    data rawdemod --p1             -> demod PSK1 - autodetect
+    data rawdemod --p2             -> demod PSK2 - autodetect
+                                  
+---------------------------------------------------------------------------------------
+emv genac                
+available offline: no
+
+Generate Application Cryptogram command. It returns data in TLV format.
+Needs a EMV applet to be selected and GPO to be executed.
+
+usage:
+    emv genac [-hkcpmatw] [-d <aac|tc|arqc>] <hex> [<hex>]... [--t0] [--t1]
+
+options:
+    -h, --help                     This help
+    -k, --keep                     Keep field ON for next command
+    -c, --cda                      Executes CDA transaction. Needs to get SDAD in results.
+    -d, --decision <aac|tc|arqc>   Terminal decision. aac - declined, tc - approved, arqc - online authorisation requested
+    -p, --params                   Load parameters from `emv_defparams.json` file for CDOLdata making from CDOL and parameters
+    -m, --make                     Make CDOLdata from CDOL (tag 8C and 8D) and parameters (def: use default parameters)
+    -a, --apdu                     Show APDU requests and responses
+    -t, --tlv                      TLV decode results of selected applets
+    -w, --wired                    Send data via contact (iso7816) interface. (def: Contactless interface)
+    <hex>                          CDOLdata/CDOL
+    --t0                           use protocol T=0 on the contact interface (default)
+    --t1                           use protocol T=1 on the contact interface
+
+examples/notes:
+    emv genac -k 0102              -> generate AC with 2-byte CDOLdata and keep field ON after command
+    emv genac -t 01020304          -> generate AC with 4-byte CDOL data, show result in TLV
+    emv genac -Daac 01020304       -> generate AC with 4-byte CDOL data and terminal decision 'declined'
+    emv genac -pmt 9F 37 04        -> load params from file, make CDOL data from CDOL, generate AC with CDOL, show result in TLV
+---------------------------------------------------------------------------------------
+hf 14a raw               
+available offline: no
+
+Sends raw bytes over ISO14443a. With option to use TOPAZ 14a mode.
+
+usage:
+    hf 14a raw [-hack3rsv] [-t <ms>] [-b <dec>] [-w <us>] [--topaz] [--crypto1] [--schann] <hex> [<hex>]...
+
+options:
+    -h, --help                     This help
+    -a                             Active signal field ON without select
+    -c                             Calculate and append CRC
+    -k                             Keep signal field ON after receive
+    -3                             ISO14443-3 select only (skip RATS)
+    -r                             Do not read response
+    -s                             Active signal field ON with select
+    -t, --timeout <ms>             Timeout in milliseconds
+    -b <dec>                       Number of bits to send. Useful for send partial byte
+    -v, --verbose                  Verbose output
+    -w, --wait <us>                Wait in microseconds between select and command
+    --topaz                        Use Topaz protocol to send command
+    --crypto1                      Use crypto1 session
+    --schann                       use secure channel. Must have key
+    <hex>                          Raw bytes to send
+
+examples/notes:
+    hf 14a raw -sc 3000            -> select, crc, where 3000 == 'read block 00'
+    hf 14a raw -ak -b 7 40         -> send 7 bit byte 0x40
+    Crypto1 session example, with special auth shortcut 6xxx<key>:
+    hf 14a raw --crypto1 -skc 6000FFFFFFFFFFFF
+    hf 14a raw --crypto1 -kc 3000 
+    hf 14a raw --crypto1 -kc 6007FFFFFFFFFFFF
+    hf 14a raw --crypto1 -c 3007  
+---------------------------------------------------------------------------------------
+hf 14a apdu              
+available offline: no
+
+Sends an ISO 7816-4 APDU via ISO 14443-4 block transmission protocol (T=CL).
+Works with all APDU types from ISO 7816-4:2013
+
+note:
+   `-m` and `-d` goes hand in hand
+   -m <CLA INS P1 P2> -d 325041592E5359532E4444463031
+
+  OR
+
+   use `-d` with complete APDU data
+   -d 00A404000E325041592E5359532E444446303100
+
+usage:
+    hf 14a apdu [-hskte] [--decode] [-m <hex>] [-l <dec>] -d <hex> [-d <hex>]...
+
+options:
+    -h, --help                     This help
+    -s, --select                   activate field and select card
+    -k, --keep                     keep signal field ON after receive
+    -t, --tlv                      decode TLV
+    --decode                       decode APDU request
+    -m, --make <hex>               APDU header, 4 bytes <CLA INS P1 P2>
+    -e, --extended                 make extended length apdu if `m` parameter included
+    -l, --le <dec>                 Le APDU parameter if `m` parameter included
+    -d, --data <hex>               full APDU package or data if `m` parameter included
+
+examples/notes:
+    hf 14a apdu -st -d 00A404000E325041592E5359532E444446303100
+    hf 14a apdu -sd -d 00A404000E325041592E5359532E444446303100             -> decode apdu
+    hf 14a apdu -sm 00A40400 -d 325041592E5359532E4444463031 -l 256         -> encode standard apdu
+    hf 14a apdu -sm 00A40400 -d 325041592E5359532E4444463031 -el 65536      -> encode extended apdu
+                                                                           
+---------------------------------------------------------------------------------------
+hf emrtd info            
+available offline: yes
+
+Display info about an eMRTD
+
+usage:
+    hf emrtd info [-hi] [-n <alphanum>] [-d <YYMMDD>] [-e <YYMMDD>] [-m <[0-9A-Z<]>] [--can <digits>]
+                    [--pace] [--bac] [--dir <str>]
+
+options:
+    -h, --help                     This help
+    -n, --doc <alphanum>           document number, up to 9 chars
+    -d, --date <YYMMDD>            date of birth in YYMMDD format
+    -e, --expiry <YYMMDD>          expiry in YYMMDD format
+    -m, --mrz <[0-9A-Z<]>          2nd line of MRZ, 44 chars (passports only)
+    --can <digits>                 Card Access Number, PACE password instead of the MRZ
+    --pace                         force PACE, fail instead of falling back to BAC
+    --bac                          force BAC, skip PACE
+    --dir <str>                    display info from offline dump stored in dirpath
+    -i, --images                   show images
+
+examples/notes:
+    hf emrtd info                 
+    hf emrtd info --dir ../dumps  
+    hf emrtd info -n 123456789 -d 890101 -e 250401
+    hf emrtd info -n 123456789 -d 890101 -e 250401 -i
+    hf emrtd info --can 123456                         -> PACE with the Card Access Number
+    hf emrtd info --can 123456 --pace                  -> PACE only, no BAC fallback
+---------------------------------------------------------------------------------------
+hf fmcos createdir       
+available offline: no
+
+CREATE DIRECTORY (DF) inside the currently selected directory
+
+usage:
+    hf fmcos createdir [-hka] --id <4hex> --space <hex> --cperm <hex> --eperm <hex> --appid <hex>
+                    [--name <hex>]
+
+options:
+    -h, --help                     This help
+    --id <4hex>                    2-byte file ID
+    --space <hex>                  space to allocate for DF (bytes, hex, e.g. 200 = 512)
+    --cperm <hex>                  create permission byte
+    --eperm <hex>                  erase permission byte
+    --appid <hex>                  application ID byte
+    --name <hex>                   DF name / AID, 0-16 bytes
+    -k, --keep                     keep field ON after command
+    -a, --apdu                     show APDU requests and responses
+
+examples/notes:
+    hf fmcos createdir --id 3F01 --space 200 --cperm F0 --eperm F0 --appid 95 --name 77616C6C6574546573740A
+---------------------------------------------------------------------------------------
+hf iclass encode         
+available offline: yes
+
+Encode binary wiegand to block 7,8,9
+Use either --bin or --wiegand/--fc/--cn
+Authenticate with either --ki (key slot index) or -k/--key (raw 8-byte hex key)
+When using emulator you have to first load a credential into emulator memory
+
+usage:
+    hf iclass encode [-hv] [--bin <bin>] [--ki <dec>] [-k <hex>] [--credit] [--elite] [--raw] [--enckey <hex>]
+                    [--fc <dec>] [--cn <dec>] [--issue <dec>] [-w <format>] [--emu] [--shallow] [--enc [none|des|2k3des]]
+                   
+
+options:
+    -h, --help                     This help
+    --bin <bin>                    Binary string i.e 0001001001
+    --ki <dec>                     Key index to select key from memory 'hf iclass managekeys'
+    -k, --key <hex>                Key as 8 hex bytes (alternative to --ki)
+    --credit                       key is assumed to be the credit key
+    --elite                        elite computations applied to key
+    --raw                          no computations applied to key
+    --enckey <hex>                 3DES transport key, 16 hex bytes
+    --fc <dec>                     facility code
+    --cn <dec>                     card number
+    --issue <dec>                  issue level
+    -w, --wiegand <format>         see [33m`wiegand list`[0m for available formats
+    --emu                          Write to emulation memory instead of card
+    --shallow                      use shallow (ASK) reader modulation instead of OOK
+    -v                             verbose (print encoded blocks)
+    --enc [none|des|2k3des]        transport encryption mode
+
+examples/notes:
+    hf iclass encode --bin 10001111100000001010100011 --ki 0                 -> FC 31 CN 337 (H10301)
+    hf iclass encode -w H10301 --fc 31 --cn 337 --ki 0                       -> FC 31 CN 337 (H10301)
+    hf iclass encode -w H10301 --fc 31 --cn 337 -k 0102030405060708          -> authenticate with  hex key
+    hf iclass encode --bin 10001111100000001010100011 --ki 0 --elite         -> FC 31 CN 337 (H10301), writing w elite key
+    hf iclass encode -w H10301 --fc 31 --cn 337 --emu                        -> Writes the ecoded data to emulator memory
+---------------------------------------------------------------------------------------
+hf mf autopwn            
+available offline: no
+
+This command automates the key recovery process on MIFARE Classic cards.
+It uses the fchk, chk, darkside, nested, hardnested and staticnested to recover keys.
+If all keys are found, it try dumping card content both to file and emulator memory.
+
+default file name template is `hf-mf-<uid>-<dump|key>.`
+using suffix the template becomes `hf-mf-<uid>-<dump|key>-<suffix>.` 
+
+
+usage:
+    hf mf autopwn [-hablv] [-k <hex>]... [-s <dec>] [-f <fn>] [--suffix <txt>] [--slow] [--mem] [--ns] [--mini] [--1k]
+                    [--2k] [--4k] [--in] [--im] [--is] [--ia] [--i2] [--i5]
+
+options:
+    -h, --help                     This help
+    -k, --key <hex>                Known key, 12 hex bytes
+    -s, --sector <dec>             Input sector number
+    -a                             Input key A (def)
+    -b                             Input key B
+    -f, --file <fn>                filename of dictionary
+    --suffix <txt>                 Add this suffix to generated files
+    --slow                         Slower acquisition (required by some non standard cards)
+    -l, --legacy                   legacy mode (use the slow `hf mf chk`)
+    -v, --verbose                  verbose output
+    --mem                          Use dictionary from flashmemory
+    --ns                           No save to file
+    --mini                         MIFARE Classic Mini / S20
+    --1k                           MIFARE Classic 1k / S50 (default)
+    --2k                           MIFARE Classic/Plus 2k
+    --4k                           MIFARE Classic 4k / S70
+    --in                           None (use CPU regular instruction set)
+    --im                           MMX
+    --is                           SSE2
+    --ia                           AVX
+    --i2                           AVX2
+    --i5                           AVX512
+
+examples/notes:
+    hf mf autopwn                 
+    hf mf autopwn -s 0 -a -k FFFFFFFFFFFF           -> target MFC 1K card, Sector 0 with known key A 'FFFFFFFFFFFF'
+    hf mf autopwn --1k -f mfc_default_keys          -> target MFC 1K card, default dictionary
+    hf mf autopwn --1k -s 0 -a -k FFFFFFFFFFFF -f mfc_default_keys        -> combo of the two above samples
+    hf mf autopwn --1k -s 0 -a -k FFFFFFFFFFFF -k a0a1a2a3a4a5            -> multiple user supplied keys
+---------------------------------------------------------------------------------------
+hf mf chk                
+available offline: no
+
+Check keys on MIFARE Classic card
+
+usage:
+    hf mf chk [-hab*] [-k <hex>]... [--tblk <dec>] [--mini] [--1k] [--2k] [--4k] [--emu] [--dump] [-f <fn>] [--no-default]
+                   
+
+options:
+    -h, --help                     This help
+    -k, --key <hex>                Key specified as 12 hex symbols
+    --tblk <dec>                   Target block number
+    -a                             Target Key A
+    -b                             Target Key B
+    -*, --all                      Target both key A & B (default)
+    --mini                         MIFARE Classic Mini / S20
+    --1k                           MIFARE Classic 1k / S50 (default)
+    --2k                           MIFARE Classic/Plus 2k
+    --4k                           MIFARE Classic 4k / S70
+    --emu                          Fill simulator keys from found keys
+    --dump                         Dump found keys to binary file
+    -f, --file <fn>                Filename of dictionary
+    --no-default                   Skip check default keys
+
+examples/notes:
+    hf mf chk --mini -k FFFFFFFFFFFF                    -> Check all sectors, all keys against MIFARE Mini
+    hf mf chk --1k -k FFFFFFFFFFFF                      -> Check all sectors, all keys against MIFARE Classic 1k
+    hf mf chk --2k -k FFFFFFFFFFFF                      -> Check all sectors, all keys against MIFARE 2k
+    hf mf chk --4k -k FFFFFFFFFFFF                      -> Check all sectors, all keys against MIFARE 4k
+    hf mf chk --1k --emu                                -> Check all sectors, all keys, 1K, and write to emulator memory
+    hf mf chk --1k --dump                               -> Check all sectors, all keys, 1K, and write to file
+    hf mf chk -a --tblk 0 -f mfc_default_keys.dic       -> Check dictionary against block 0, key A
+---------------------------------------------------------------------------------------
+hf mf dump               
+available offline: no
+
+Dump MIFARE Classic tag to file (bin/json)
+If no <name> given, UID will be used as filename
+
+usage:
+    hf mf dump [-hv] [-f <fn>] [-k <fn>] [--mini] [--1k] [--2k] [--4k] [--ns] [--sk]
+
+options:
+    -h, --help                     This help
+    -f, --file <fn>                Specify a filename for dump file
+    -k, --keys <fn>                filename of keys
+    --mini                         MIFARE Classic Mini / S20
+    --1k                           MIFARE Classic 1k / S50 (def)
+    --2k                           MIFARE Classic/Plus 2k
+    --4k                           MIFARE Classic 4k / S70
+    --ns                           no save to file
+    -v, --verbose                  verbose output
+    --sk                           Save extracted keys to binary file
+
+examples/notes:
+    hf mf dump --mini                              -> MIFARE Mini
+    hf mf dump --1k                                -> MIFARE Classic 1k
+    hf mf dump --2k                                -> MIFARE 2k
+    hf mf dump --4k                                -> MIFARE 4k
+    hf mf dump --keys hf-mf-066C8B78-key.bin       -> MIFARE 1k with keys from specified file
+                                                  
+---------------------------------------------------------------------------------------
+hf mf rdbl               
+available offline: no
+
+Read MIFARE Classic block
+
+usage:
+    hf mf rdbl [-habv] --blk <dec> [-c <dec>] [-k <hex>]
+
+options:
+    -h, --help                     This help
+    --blk <dec>                    block number
+    -a                             input key type is key A (def)
+    -b                             input key type is key B
+    -c <dec>                       input key type is key A + offset
+    -k, --key <hex>                key, 6 hex bytes
+    -v, --verbose                  verbose output
+
+examples/notes:
+    hf mf rdbl --blk 0            
+    hf mf rdbl --blk 0 -k A0A1A2A3A4A5
+    hf mf rdbl --blk 3 -v          -> get block 3, decode sector trailer
+                                  
+---------------------------------------------------------------------------------------
+hf mf eload              
+available offline: no
+
+Load emulator memory with data from (bin/eml/json) dump file
+
+usage:
+    hf mf eload [-hmv] -f <fn> [--mini] [--1k] [--2k] [--4k] [--ul] [-q <dec>]
+
+options:
+    -h, --help                     This help
+    -f, --file <fn>                Specify a filename for dump file
+    --mini                         MIFARE Classic Mini / S20
+    --1k                           MIFARE Classic 1k / S50 (def)
+    --2k                           MIFARE Classic/Plus 2k
+    --4k                           MIFARE Classic 4k / S70
+    --ul                           MIFARE Ultralight family
+    -m, --mem                      use RDV4 spiffs
+    -q, --qty <dec>                manually set number of blocks (overrides)
+    -v, --verbose                  verbose output
+
+examples/notes:
+    hf mf eload -f hf-mf-01020304.bin
+    hf mf eload --4k -f hf-mf-01020304.eml
+                                  
+---------------------------------------------------------------------------------------
+hf mfu cauth             
+available offline: no
+
+Tests 3DES key on Mifare Ultralight-C tag.
+If key is not specified, a set of known defaults will be tried.
+
+usage:
+    hf mfu cauth [-hlkn0] [--key <hex>] [-r <n>] [--noauth] [--reset] [--collect] [--pair <ERndB:ERndARndBp>]...
+                   
+
+options:
+    -h, --help                     This help
+    --key <hex>                    Authentication key (16 bytes in hex)
+    -l                             Swap entered key's endianness
+    -k                             Keep field on at the end (only if a key is provided)
+    -r, --retries <n>              Number of retries with provided key (def: 0)
+    -n, --nocheck                  Skip checking tag answer correctness (only if a key is provided)
+    -0, --read0                    Use fast READ0 (skip anticol)
+    --noauth                       Skip authentication (when collecting nonces)
+    --reset                        Reset field between each attempt
+    --collect                      Collect nonces and show top 10
+    --pair <ERndB:ERndARndBp>      Nonce pair (option can be provided up to 10 times)
+
+examples/notes:
+    hf mfu cauth                  
+    hf mfu cauth --key 000102030405060708090a0b0c0d0e0f
+---------------------------------------------------------------------------------------
+hf mfdes auth            
+available offline: no
+
+Select application on the card. It selects app if it is a valid one or returns an error.
+
+usage:
+    hf mfdes auth [-hav] [-n <dec>] [-t <DES|2TDEA|3TDEA|AES>] [-k <hex>] [--kdf <none|AN10922|gallagher>]
+                    [-i <hex>] [-m <plain|mac|encrypt>] [-c <native|niso|iso>] [--schann <d40|ev1|ev2|lrp>]
+                    [--aid <hex>] [--isoid <hex>] [--dfname <hex>] [--save]
+
+options:
+    -h, --help                     This help
+    -a, --apdu                     Show APDU requests and responses
+    -v, --verbose                  Verbose output
+    -n, --keyno <dec>              Key number
+    -t, --algo <DES|2TDEA|3TDEA|AES> Crypt algo
+    -k, --key <hex>                Key for authenticate (8|16|24 hex bytes)
+    --kdf <none|AN10922|gallagher> Key Derivation Function (KDF)
+    -i, --kdfi <hex>               KDF input (1-31 hex bytes)
+    -m, --cmode <plain|mac|encrypt> Communicaton mode
+    -c, --ccset <native|niso|iso>  Communicaton command set
+    --schann <d40|ev1|ev2|lrp>     Secure channel
+    --aid <hex>                    Application ID of application for some parameters (3 hex bytes, big endian)
+    --isoid <hex>                  Application ISO ID (ISO DF ID) (2 hex bytes, big endian)
+    --dfname <hex>                 Application ISO DF Name (5-16 hex bytes, big endian)
+    --save                         saves channels parameters to defaults if authentication succeeds
+
+examples/notes:
+    hf mfdes auth  -n 0 -t des -k 0000000000000000 --kdf none            -> select PICC level and authenticate with key num=0, key type=des, key=00..00 and key derivation = none
+    hf mfdes auth  -n 0 -t aes -k 00000000000000000000000000000000       -> select PICC level and authenticate with key num=0, key type=aes, key=00..00 and key derivation = none
+    hf mfdes auth  -n 0 -t des -k 0000000000000000 --save                -> select PICC level and authenticate and in case of successful authentication - save channel parameters to defaults
+    hf mfdes auth --aid 123456         -> select application 123456 and authenticate via parameters from `default` command
+    hf mfdes auth --dfname D2760000850100 -n 0 -t aes -k 00000000000000000000000000000000      -> select DF by name and authenticate
+---------------------------------------------------------------------------------------
+hf mfdes setconfig       
+available offline: no
+
+Set card configuration. 
+WARNING! Danger zone!
+Needs to provide card's master key and works if not blocked by config.
+
+usage:
+    hf mfdes setconfig [-hav] [-n <dec>] [-t <DES|2TDEA|3TDEA|AES>] [-k <hex>] [--kdf <none|AN10922|gallagher>]
+                    [-i <hex>] [-m <plain|mac|encrypt>] [-c <native|niso|iso>] [--schann <d40|ev1|ev2|lrp>]
+                    [--aid <hex>] [--isoid <hex>] [-p <hex>] [-d <hex>]
+
+options:
+    -h, --help                     This help
+    -a, --apdu                     Show APDU requests and responses
+    -v, --verbose                  Verbose output
+    -n, --keyno <dec>              Key number
+    -t, --algo <DES|2TDEA|3TDEA|AES> Crypt algo
+    -k, --key <hex>                Key for authenticate (8|16|24 hex bytes)
+    --kdf <none|AN10922|gallagher> Key Derivation Function (KDF)
+    -i, --kdfi <hex>               KDF input (1-31 hex bytes)
+    -m, --cmode <plain|mac|encrypt> Communicaton mode
+    -c, --ccset <native|niso|iso>  Communicaton command set
+    --schann <d40|ev1|ev2|lrp>     Secure channel
+    --aid <hex>                    Application ID of application for some parameters (3 hex bytes, big endian)
+    --isoid <hex>                  Application ISO ID (ISO DF ID) (2 hex bytes, big endian).
+    -p, --param <hex>              Parameter id (1 hex byte)
+    -d, --data <hex>               Data for parameter (1..30 hex bytes)
+
+examples/notes:
+    More about options MF2DLHX0.pdf.
+    Options list:                 
+      00h PICC configuration.     
+      02h ATS update.             
+      03h SAK update              
+      04h Secure Messaging Configuration.
+      05h Capability data. (here change for LRP in the Desfire Light [enable 00000000010000000000])
+      06h DF Name renaming (one-time)
+      08h File renaming (one-time)
+      09h Value file configuration (one-time)
+      0Ah Failed authentication counter setting [disable 00ffffffff]
+      0Bh HW configuration        
+                                  
+    hf mfdes setconfig --param 03 --data 0428                    -> set SAK
+    hf mfdes setconfig --param 02 --data 0875778102637264        -> set ATS (first byte - length)
+    hf mfdes setconfig --isoid df01 -t aes --schann ev2 --param 05 --data 00000000020000000000      -> set LRP mode enable for Desfire Light
+    hf mfdes setconfig --isoid df01 -t aes --schann ev2 --param 0a --data 00ffffffff                -> Disable failed auth counters for Desfire Light
+    hf mfdes setconfig --isoid df01 -t aes --schann lrp --param 0a --data 00ffffffff                -> Disable failed auth counters for Desfire Light via lrp
+---------------------------------------------------------------------------------------
+hf mfdes chkeysettings   
+available offline: no
+
+Change key settings for card level or application level.
+WARNING: card level changes may block the card!
+
+usage:
+    hf mfdes chkeysettings [-hav] [-n <dec>] [-t <DES|2TDEA|3TDEA|AES>] [-k <hex>] [--kdf <none|AN10922|gallagher>]
+                    [-i <hex>] [-m <plain|mac|encrypt>] [-c <native|niso|iso>] [--schann <d40|ev1|ev2|lrp>]
+                    [--aid <hex>] [-d <HEX>]
+
+options:
+    -h, --help                     This help
+    -a, --apdu                     Show APDU requests and responses
+    -v, --verbose                  Verbose output
+    -n, --keyno <dec>              Key number
+    -t, --algo <DES|2TDEA|3TDEA|AES> Crypt algo
+    -k, --key <hex>                Key for authenticate (8|16|24 hex bytes)
+    --kdf <none|AN10922|gallagher> Key Derivation Function (KDF)
+    -i, --kdfi <hex>               KDF input (1-31 hex bytes)
+    -m, --cmode <plain|mac|encrypt> Communicaton mode
+    -c, --ccset <native|niso|iso>  Communicaton command set
+    --schann <d40|ev1|ev2|lrp>     Secure channel
+    --aid <hex>                    Application ID (3 hex bytes, big endian)
+    -d, --data <HEX>               Key settings (1 hex byte)
+
+examples/notes:
+    hf mfdes chkeysettings -d 0f              -> set picc key settings with default key/channel setup
+    hf mfdes chkeysettings --aid 123456 -d 0f          -> set app 123456 key settings with default key/channel setup
+---------------------------------------------------------------------------------------
+hf seos info             
+available offline: no
+
+Prints the card's UID, ATQA, SAK, ATS and MIFARE Classic emulation, which SEOS AIDs it answers
+and which aidlist.json AIDs it has, then
+requests the unauthenticated information from the default ADF of a SEOS card
+- If the card is a SEOS card
+- Are static RND.ICC keys used (can detect SEOS default keyset)
+- What encryption and hashing algorithm is use
+
+By default:
+  - Privacy Key: 0
+    The selected privacy slot provides both encryption and MAC subkeys for ADF handling.
+  - Auth Key   : 0
+    The selected auth slot is sent to the card for challenge/authentication.
+
+
+usage:
+    hf seos info [-h] [--privacy-key <idx>] [--auth-key <idx>] [--aid <hex>]
+
+options:
+    -h, --help                     This help
+    --privacy-key <idx>            Privacy key slot index. The selected slot provides both privacy encryption and MAC subkeys for ADF handling
+    --auth-key <idx>               Auth key slot index. The selected slot is sent to the card for challenge/authentication
+    --aid <hex>                    Use a custom SEOS AID
+
+examples/notes:
+    hf seos info                  
+    hf seos info --privacy-key 8 --auth-key 9
+    hf seos info --privacy-key 8 --auth-key 9 --aid A0000004400001010001
+---------------------------------------------------------------------------------------
+hf vas reader            
+available offline: no
+
+Read and decrypt Value Added Services (VAS) message
+
+usage:
+    hf vas reader [-h@v] [--pid <str>]... [-k <pem|der-b64|der-hex|scalar-b64|scalar-hex|path>]...
+                    [--url <str>] [--mode <vasorpay|vasandpay|vasonly>]
+
+options:
+    -h, --help                     This help
+    --pid <str>                    PID, pass type id (repeat --pid for multiple values)
+    -k, --key, --file, --reader-private-key, --readerprivkey, --rpk <pem|der-b64|der-hex|scalar-b64|scalar-hex|path> Terminal private key (repeat --key for multiple values)
+    --url <str>                    a URL to provide to the mobile device
+    --mode <vasorpay|vasandpay|vasonly> VAS mode used in ECP and GET DATA capabilities
+    -@                             continuous mode
+    -v, --verbose                  Verbose output
+
+examples/notes:
+    hf vas reader --url https://example.com         -> URL Only mode
+    hf vas reader --pid pass.com.passkit.pksamples.nfcdemo -k vas.passkit.der -@
+    hf vas reader --pid pass.com.pronto.zebra-wallet-pass.demo -k vas.zebra.der -@
+    hf vas reader --pid pass.com.springcard.springblue.generic -k vas.springcard.der -@
+    hf vas reader --pid pass.id.one --pid pass.id.two -k key.one.der -k key.two.der
+    hf vas reader --mode vasandpay --pid pass.id -k key.der
+                                                   
+---------------------------------------------------------------------------------------
+lf config                
+available offline: no
+
+Get/Set config for LF sampling, bit/sample, decimation, frequency
+These changes are temporary, will be reset after a power cycle.
+
+ - use `lf read` performs a read (active field)
+ - use `lf sniff` performs a sniff (no active field)
+
+usage:
+    lf config [-hr] [--125] [--134] [-a <0|1>] [-b <1-8>] [--dec <1-8>] [--divisor <19-255>] [-f <47-600>]
+                    [-s <dec>] [-t <0-128>]
+
+options:
+    -h, --help                     This help
+    --125                          125 kHz frequency
+    --134                          134 kHz frequency
+    -a, --avg <0|1>                averaging - if set, will average the stored sample value when decimating (default 1)
+    -b, --bps <1-8>                sets resolution of bits per sample (default 8)
+    --dec <1-8>                    sets decimation. A value of N saves only 1 in N samples (default 1)
+    --divisor <19-255>             Manually set freq divisor. 88 -> 134 kHz, 95 -> 125 kHz
+    -f, --freq <47-600>            manually set frequency in kHz
+    -r, --reset                    reset values to defaults
+    -s, --skip <dec>               sets a number of samples to skip before capture (default 0)
+    -t, --trig <0-128>             sets trigger threshold. 0 means no threshold
+
+examples/notes:
+    lf config                          -> shows current config
+    lf config -b 8 --125               -> samples at 125 kHz, 8 bps
+    lf config -b 4 --134 --dec 3       -> samples at 134 kHz, averages three samples into one, stored with a resolution of 4 bits per sample
+    lf config --trig 20 -s 10000       -> trigger sampling when above 20, skip 10 000 first samples after triggered
+    lf config --reset                  -> reset back to default values
+                                      
+---------------------------------------------------------------------------------------
+lf em 410x clone         
+available offline: no
+
+clone a EM410x ID to a T55x7, Q5/T5555, EM4305/4469, Hitag S/8211/8268/8310 or Hitag µ/8265 tag.
+
+usage:
+    lf em 410x clone [-h] [--clk <dec>] --id <hex> [--q5] [--em] [--hts] [--htu] [--electra]
+
+options:
+    -h, --help                     This help
+    --clk <dec>                    <16|32|40|64> clock (default 64)
+    --id <hex>                     EM Tag ID number (5 hex bytes)
+    --q5                           optional - specify writing to Q5/T5555 tag
+    --em                           optional - specify writing to EM4305/4469 tag
+    --hts                          optional - specify writing to Hitag S/8211/8268/8310 tag
+    --htu                          optional - specify writing to Hitag µ/8265 tag
+    --electra                      optional - add Electra blocks to tag
+
+examples/notes:
+    lf em 410x clone --id 0F0368568B             -> encode for T55x7 tag
+    lf em 410x clone --id 0F0368568B --q5        -> encode for Q5/T5555 tag
+    lf em 410x clone --id 0F0368568B --em        -> encode for EM4305/4469
+    lf em 410x clone --id 0F0368568B --hts       -> encode for Hitag S/8211/8268/8310
+    lf em 410x clone --id 0F0368568B --htu       -> encode for Hitag µ/8265 tag
+
+
+
+=======================================================================================
+lf em 4x05
+
+ { EM 4205 / 4305 / 4369 / 4469 commands... }
+---------------------------------------------------------------------------------------
+mad encode               
+available offline: yes
+
+Encode a MAD byte array from AID-to-sector mappings
+
+usage:
+    mad encode [-hq] --aid <hex:sectors> [--aid <hex:sectors>]... [--be]
+
+options:
+    -h, --help                     This help
+    --aid <hex:sectors>            AID and sector ranges (e.g. E103:1-3,5)
+    -q, --quiet                    quiet output, hex bytes only
+    --be                           big-endian AID byte swap
+
+examples/notes:
+    mad encode --aid E103:1-3 --aid 484D:4               -> MAD1 with NDEF + HID
+    mad encode --aid E103:1-3,5                          -> non-contiguous sectors
+    mad encode --aid E103:1-3,17-18 --aid 484D:4         -> MAD1 + MAD2 + HID
+    mad encode --aid E103:1-3 -q                         -> quiet, hex only
+                                                        
+---------------------------------------------------------------------------------------
+script run               
+available offline: yes
+
+Run a Lua, Cmd or Python script. If no extension it will search for lua/cmd/py extensions
+Use `script list` to see available scripts
+
+usage:
+    script run [-h] <filename> [<params>]...
+
+options:
+    -h, --help                     This help
+    <filename>                     name of script to run
+    <params>                       script parameters
+
+examples/notes:
+    script run my_script -h       
+                                  
+
+
+
+=======================================================================================
+trace
+
+ { Trace manipulation... }
+---------------------------------------------------------------------------------------
+wiegand encode           
+available offline: yes
+
+Encode wiegand formatted number to raw hex
+
+usage:
+    wiegand encode [-hnv] [-b <bin>] [--fc <dec>] [--cn <dec>] [--issue <dec>] [--oem <dec>] [-w <format>]
+                    [--pre]
+
+options:
+    -h, --help                     This help
+    -b, --bin <bin>                binary string to be encoded
+    --fc <dec>                     facility number
+    --cn <dec>                     card number
+    --issue <dec>                  issue level
+    --oem <dec>                    OEM code
+    -w, --wiegand <format>         see `wiegand list` for available formats
+    -n, --new                      encode to new ASN.1 encoded format
+    --pre                          add HID ProxII preamble to wiegand output
+    -v, --verbose                  verbose output
+
+examples/notes:
+    wiegand encode --fc 101 --cn 1337                    ->  show all formats
+    wiegand encode -w H10301 --fc 101 --cn 1337          ->  H10301 format
+    wiegand encode --bin 1                               ->  raw wiegand hex with sentinel
+    wiegand encode -w H10301 --fc 123 --cn 4567 --new      -> new ASN.1 encoded format
+---------------------------------------------------------------------------------------
+hf sniff                 
+available offline: no
+
+The high frequency sniffer will assign all available memory on device for sniffed data.
+Use `data samples` to download from device and `data plot` to visualize it.
+Press button to quit the sniffing.
+
+usage:
+    hf sniff [-h] [--sp <dec>] [--st <dec>] [--smode [none|drop|min|max|avg]] [--sratio <dec, ms>]
+                   
+
+options:
+    -h, --help                     This help
+    --sp <dec>                     skip sample pairs
+    --st <dec>                     skip number of triggers
+    --smode [none|drop|min|max|avg] Skip mode. It switches on the function that applies to several samples before they saved to memory
+    --sratio <dec, ms>             Skip ratio. It applied the function above to (ratio * 2) samples. For ratio = 1 it 2 samples.
+
+examples/notes:
+    hf sniff                      
+    hf sniff --sp 1000 --st 0      -> skip 1000 pairs, skip 0 triggers
+
+
+
+=======================================================================================
+hf 14a
+
+ { ISO14443A RFIDs...                  }
+
+---------------------------------------------------------------------------------------
+hf mfdes createfile      
+available offline: no
+
+Create Standard/Backup file in the application. Application master key needs to be provided or flag --no-auth set (depend on application settings).
+
+usage:
+    hf mfdes createfile [-hav] [-n <dec>] [-t <DES|2TDEA|3TDEA|AES>] [-k <hex>] [--kdf <none|AN10922|gallagher>]
+                    [-i <hex>] [-m <plain|mac|encrypt>] [-c <native|niso|iso>] [--schann <d40|ev1|ev2|lrp>]
+                    [--aid <hex>] [--fid <hex>] [--isofid <hex>] [--rawtype <hex>] [--rawdata <hex>]
+                    [--amode <plain|mac|encrypt>] [--rawrights <hex>] [--rrights <key0..key13|free|deny>]
+                    [--wrights <key0..key13|free|deny>] [--rwrights <key0..key13|free|deny>]
+                    [--chrights <key0..key13|free|deny>] [--no-auth] [--size <hex>] [--backup]
+                   
+
+options:
+    -h, --help                     This help
+    -a, --apdu                     Show APDU requests and responses
+    -v, --verbose                  Verbose output
+    -n, --keyno <dec>              Key number
+    -t, --algo <DES|2TDEA|3TDEA|AES> Crypt algo
+    -k, --key <hex>                Key for authenticate (8|16|24 hex bytes)
+    --kdf <none|AN10922|gallagher> Key Derivation Function (KDF)
+    -i, --kdfi <hex>               KDF input (1-31 hex bytes)
+    -m, --cmode <plain|mac|encrypt> Communicaton mode
+    -c, --ccset <native|niso|iso>  Communicaton command set
+    --schann <d40|ev1|ev2|lrp>     Secure channel
+    --aid <hex>                    Application ID (3 hex bytes, big endian)
+    --fid <hex>                    File ID (1 hex byte)
+    --isofid <hex>                 ISO File ID (2 hex bytes)
+    --rawtype <hex>                Raw file type (1 hex byte)
+    --rawdata <hex>                Raw file settings (hex > 5 bytes)
+    --amode <plain|mac|encrypt>    File access mode
+    --rawrights <hex>              Access rights for file (2 hex bytes) R/W/RW/Chg, 0x0 - 0xD Key, 0xE Free, 0xF Denied
+    --rrights <key0..key13|free|deny> Read file access mode: the specified key, free, deny
+    --wrights <key0..key13|free|deny> Write file access mode: the specified key, free, deny
+    --rwrights <key0..key13|free|deny> Read/Write file access mode: the specified key, free, deny
+    --chrights <key0..key13|free|deny> Change file settings access mode: the specified key, free, deny
+    --no-auth                      Execute without authentication
+    --size <hex>                   File size (3 hex bytes, big endian)
+    --backup                       Create backupfile instead of standard file
+
+examples/notes:
+    --rawtype/--rawdata have priority over the other settings. and with these parameters you can create any file. file id comes from parameters, all the rest data must be in the --rawdata parameter
+    --rawrights have priority over the separate rights settings.
+    Key/mode/etc of the authentication depends on application settings
+    hf mfdes createfile --aid 123456 --fid 01 --isofid 0001 --size 000010      -> create file with iso id. Authentication with defaults from `default` command
+    hf mfdes createfile --aid 123456 --fid 01 --rawtype 01 --rawdata 000100EEEE000100      -> create file via sending rawdata to the card. Can be used to create any type of file. Authentication with defaults from `default` command
+    hf mfdes createfile --aid 123456 --fid 01 --amode plain --rrights free --wrights free --rwrights free --chrights key0      -> create file app=123456, file=01 and mentioned rights with defaults from `default` command
+    hf mfdes createfile -n 0 -t des -k 0000000000000000 --kdf none --aid 123456 --fid 01 --rawtype 00 --rawdata 00EEEE000100      -> execute with default factory setup
+
+---------------------------------------------------------------------------------------
+piv select               
+available offline: no
+
+Executes select applet command
+
+usage:
+    piv select [-hskatw] [--aid <hex>]
+
+options:
+    -h, --help                     This help
+    -s, -S, --select               Activate field and select applet
+    -k, -K, --keep                 Keep field for next command
+    -a, -A, --apdu                 Show APDU requests and responses
+    -t, -T, --tlv                  TLV decode results
+    -w, -W, --wired                Send data via contact (iso7816) interface. (def: Contactless interface)
+    --aid <hex>                    Applet ID to select. By default A0000003080000100 will be used
+
+examples/notes:
+    piv select -s                  -> select card, select applet
+    piv select -st --aid a00000030800001000        -> select card, select applet a00000030800001000, show result in TLV
+                                                  
+
+---------------------------------------------------------------------------------------
+hf 14b sim               
+available offline: no
+
+Simulate a ISO/IEC 14443 type B tag with 4 byte UID / PUPI
+
+usage:
+    hf 14b sim [-h] -u hex
+
+options:
+    -h, --help                     This help
+    -u, --uid hex                  4byte UID/PUPI
+
+examples/notes:
+    hf 14b sim -u 11AA33BB        
+
+---------------------------------------------------------------------------------------
+hf mfu ndefread          
+available offline: no
+
+Prints NFC Data Exchange Format (NDEF)
+
+usage:
+    hf mfu ndefread [-hlv] [-k Replace default key for NDEF] [-f <fn>] [--schann]
+
+options:
+    -h, --help                     This help
+    -l                             Swap entered key's endianness
+    -f, --file <fn>                Save raw NDEF to file
+    -v, --verbose                  Verbose output
+    --schann                       use secure channel. Must have key
+
+examples/notes:
+    hf mfu ndefread                -> shows NDEF data
+    hf mfu ndefread -k ffffffff    -> shows NDEF data with key
+    hf mfu ndefread -f myfilename      -> save raw NDEF to file
+
+---------------------------------------------------------------------------------------
+hf mf gen3freeze         
+available offline: no
+
+Perma lock further UID changes. No more UID changes available after operation completed
+
+Note: operation is ! irreversible !
+
+usage:
+    hf mf gen3freeze -y[h]
+
+options:
+    -h, --help                     This help
+    -y, --yes                      confirm UID lock operation
+
+examples/notes:
+    hf mf gen3freeze -y           
+
+---------------------------------------------------------------------------------------
+hf mfdes createmfcmapping
+available offline: no
+
+Create a Mifare Classic mapping on a DESFire EV3C. The MFC License MAC key (AES only) must have been set previously as PICC key number 50.
+
+usage:
+    hf mfdes createmfcmapping [-hav] [-n <dec>] [-t <DES|2TDEA|3TDEA|AES>] [-k <hex>] [--kdf <none|AN10922|gallagher>]
+                    [-i <hex>] [-m <plain|mac|encrypt>] [-c <native|niso|iso>] [--schann <d40|ev1|ev2|lrp>]
+                    [--aid <hex>] [--isoid <hex>] [--fid <hex>] [--restore-fid <hex>] [-b <num>[,<num>[,...]]]
+                    [--mfc-license <hex>] [--mfc-license-mac <hex>] [--ka] [--kb] [--access-conditions]
+                    [--restore-transfer]
+
+options:
+    -h, --help                     This help
+    -a, --apdu                     Show APDU requests and responses
+    -v, --verbose                  Verbose output
+    -n, --keyno <dec>              Key number
+    -t, --algo <DES|2TDEA|3TDEA|AES> Crypt algo
+    -k, --key <hex>                Key for authenticate (8|16|24 hex bytes)
+    --kdf <none|AN10922|gallagher> Key Derivation Function (KDF)
+    -i, --kdfi <hex>               KDF input (1-31 hex bytes)
+    -m, --cmode <plain|mac|encrypt> Communicaton mode
+    -c, --ccset <native|niso|iso>  Communicaton command set
+    --schann <d40|ev1|ev2|lrp>     Secure channel
+    --aid <hex>                    Application ID (3 hex bytes, big endian)
+    --isoid <hex>                  Application ISO ID (ISO DF ID) (2 hex bytes, big endian)
+    --fid <hex>                    File ID to map (1 hex byte)
+    --restore-fid <hex>            Restore source when mapping value files to value blocks (1 hex byte)
+    -b, --blk <num>[,<num>[,...]]  The MFC blocks to map, must be unique (use -b data for all data blocks, and -b trailer for all trailer blocks)
+    --mfc-license <hex>            The MFC license (omit to use saved license and license MAC)
+    --mfc-license-mac <hex>        The MFC license MAC (omit to use saved license and license MAC)
+    --ka                           Allow updating key A from inside sector trailers mapped to DESFire files
+    --kb                           Allow updating key B from inside sector trailers mapped to DESFire files
+    --access-conditions            Allow updating the access conditions from inside sector trailers mapped to DESFire files
+    --restore-transfer             Enable the RestoreTransfer command for the mapped value blocks
+
+examples/notes:
+    hf mfdes createmfcmapping --aid 123456 --fid 01 --mfc-keys FFFFFFFFFFFF111111111111222222222222 --mfc-blocks 4,5,6,8
+                                   -> Map blocks 4, 5, 6, 8 where sector 1 key A is FFFFFFFFFFFF with key B readable,
+                                   -> sector 2 keys are 111111111111 and 222222222222 with key B used for authentication
+                                  
+
+---------------------------------------------------------------------------------------
+hf mfu countertear       
+available offline: no
+
+Tear-off test against a Ev1 counter
+
+usage:
+    hf mfu countertear [-h] [-c <0,1,2>] [-i <dec>] [-l <dec>] [-s <dec>] [--fix <dec>] [-x <string>]
+
+options:
+    -h, --help                     This help
+    -c, --cnt <0,1,2>              Target this EV1 counter (0,1,2)
+    -i, --inc <dec>                time interval to increase in each iteration - default 10 us
+    -l, --limit <dec>              test upper limit time - default 3000 us
+    -s, --start <dec>              test start time - default 500 us
+    --fix <dec>                    test fixed loop delay
+    -x, --hex <string>             3 byte hex to increase counter with - default 010000
+
+examples/notes:
+    hf mfu countertear -c 0              -> target counter 0
+    hf mfu countertear -c 0 -s 200       -> target counter 0, start delay 200
+    hf mfu countertear -c 0 -x 020000       -> target counter 0, increasing the counter by 2 bytes
+                                           
+
+---------------------------------------------------------------------------------------
+lf em 4x70 setkey        
+available offline: no
+
+Write new 96-bit key to tag
+
+
+usage:
+    lf em 4x70 setkey [-h] -k <hex>
+
+options:
+    -h, --help                     This help
+    -k, --key <hex>                Key as 12 hex bytes
+
+examples/notes:
+    lf em 4x70 setkey -k F32AA98CF5BE4ADFA6D3480B   (pm3 test key)
+    lf em 4x70 setkey -k A090A0A02080000000000000   (research paper key)
+    lf em 4x70 setkey -k 022A028C02BE000102030405   (autorecovery test key)
+                                  
+
+---------------------------------------------------------------------------------------
+hf iclass blacktears     
+available offline: no
+
+Tear off the iCLASS (new-silicon only) configuration block to set non-secure page mode.
+Make sure you know the target card credit key. Typical  `--ki 1` or `--ki 3`
+
+
+usage:
+    hf iclass blacktears [-hv] [-k <hex>] [--ki <dec>] [--credit] [-s <dec>] [-i <dec>] [-e <dec>] [-o <hex>] [--dns]
+                    [--raw] [--shallow]
+
+options:
+    -h, --help                     This help
+    -k, --key <hex>                Access key as 8 hex bytes
+    --ki <dec>                     Key index to select key from memory 'hf iclass managekeys'
+    --credit                       key is assumed to be the credit key
+    -s <dec>                       tearoff delay start (in us) must be between 1 and 65535 (65ms). Precision is about 1/3 us
+    -i <dec>                       tearoff delay increment (in us) - default 5
+    -e <dec>                       tearoff delay end (in us) must be a higher value than the start delay
+    -o, --otp <hex>                Custom OTP value as 2 hex bytes
+    --dns                          Do not stabilize the bits, and return the raw dump of the block after tearoff
+    --raw                          no computations applied to key
+    -v, --verbose                  verbose output
+    --shallow                      use shallow (ASK) reader modulation instead of OOK
+
+examples/notes:
+    hf iclass blacktears -k 001122334455667B    <--  debit custom key
+    hf iclass blacktears --credit --ki 1        <-- credit key at index 1
+
+---------------------------------------------------------------------------------------
+hf mf cload              
+available offline: no
+
+Load magic gen1a card with data from (bin/eml/json) dump file
+or from emulator memory.
+
+usage:
+    hf mf cload [-h] [-f <fn>] [--mini] [--1k] [--1k+] [--2k] [--4k] [--emu] [--gdm]
+
+options:
+    -h, --help                     This help
+    -f, --file <fn>                Specify a filename for dump file
+    --mini                         MIFARE Classic Mini / S20
+    --1k                           MIFARE Classic 1k / S50 (def)
+    --1k+                          MIFARE Classic Ev1 1k / S50
+    --2k                           MIFARE Classic/Plus 2k
+    --4k                           MIFARE Classic 4k / S70
+    --emu                          from emulator memory
+    --gdm                          use gdm alt (20/23) magic wakeup
+
+examples/notes:
+    hf mf cload --emu             
+    hf mf cload -f hf-mf-01020304.eml
+                                  
+
+---------------------------------------------------------------------------------------

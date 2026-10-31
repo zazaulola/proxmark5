@@ -378,6 +378,16 @@ class Pm3Session private constructor(context: Context) {
         post { enqueue(Op { it.note(line) }) }
     }
 
+    /**
+     * Returns once [terminal] holds everything the log file has now. A command's output is in the
+     * file before its result is sent, so after the result this gives the whole of that output.
+     */
+    suspend fun logCaughtUp() {
+        val done = CompletableDeferred<Unit>()
+        follower.sync { done.complete(Unit) }
+        done.await()
+    }
+
     /** Empties the log, and the terminal with it. */
     fun clearLog() {
         terminal.clear()

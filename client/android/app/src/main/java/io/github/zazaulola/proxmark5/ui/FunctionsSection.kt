@@ -35,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,9 +50,11 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.zazaulola.proxmark5.parse.CommandNode
 import io.github.zazaulola.proxmark5.parse.CommandTree
 import io.github.zazaulola.proxmark5.ui.params.CommandScreen
+import io.github.zazaulola.proxmark5.ui.params.ParamsViewModel
 
 // The groups of the Functions section, in the order they are shown.
 private val GROUP_ORDER = listOf(
@@ -83,6 +86,18 @@ fun FunctionsSection(vm: AppViewModel) {
     val groupList = rememberSaveable(path, saver = LazyListState.Saver) { LazyListState() }
     val foundList = rememberSaveable(query, saver = LazyListState.Saver) { LazyListState() }
 
+    // a line from the history to edit as tags: its command opens with the line read into the draft
+    val params: ParamsViewModel = viewModel()
+    val editorRequest by vm.openInEditor.collectAsStateWithLifecycle()
+    LaunchedEffect(editorRequest) {
+        val req = editorRequest ?: return@LaunchedEffect
+        params.loadLine(req.command, req.line)
+        query = ""
+        path = req.command.substringBeforeLast(' ', "")
+        open = req.command
+        vm.editorRequestDone(req)
+    }
+
     // Back: out of a command first, then out of the search, then up a level
     BackHandler(enabled = open != null || query.isNotEmpty() || path.isNotEmpty()) {
         when {
@@ -94,7 +109,7 @@ fun FunctionsSection(vm: AppViewModel) {
 
     val command = open?.let { line -> root?.find(line.split(' ')) }?.takeIf { !it.isGroup }
     if (command != null) {
-        CommandScreen(vm, command, onBack = { open = null })
+        CommandScreen(vm, command, onBack = { open = null }, params = params)
         return
     }
 

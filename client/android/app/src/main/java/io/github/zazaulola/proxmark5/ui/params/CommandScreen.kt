@@ -227,7 +227,7 @@ fun CommandScreen(vm: AppViewModel, node: CommandNode, onBack: () -> Unit, param
                     OutlinedButton(onClick = { typing = true }) { Text("Текстом") }
                     // the client answers -h for any command, available or not
                     OutlinedButton(onClick = {
-                        vm.runCommand("$cmd -h")
+                        vm.runCommand("$cmd -h", record = false)
                         sent = "$cmd -h"
                     }) { Text("Справка") }
                     if (state is HelpState.Ready) {

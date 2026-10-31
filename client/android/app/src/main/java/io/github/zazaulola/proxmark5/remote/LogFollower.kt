@@ -76,6 +76,15 @@ internal class LogFollower(private val app: Context, private val terminal: Termi
         terminal.append(noteText(text))
     }
 
+    /** Reads to the end of what the file holds now, then calls [done] (on the follower's thread). */
+    fun sync(done: () -> Unit) = submit {
+        try {
+            drainAll()
+        } finally {
+            done()
+        }
+    }
+
     /** The log was cleared: what is in the file now is old, so the terminal does not show it. */
     fun clear() = submit {
         discard()

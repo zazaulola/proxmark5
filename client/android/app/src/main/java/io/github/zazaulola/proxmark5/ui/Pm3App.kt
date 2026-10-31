@@ -15,6 +15,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.SaveableStateHolder
@@ -23,6 +24,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** The three sections of the app. */
 private enum class Section(val label: String, val icon: ImageVector) {
@@ -42,6 +44,11 @@ fun Pm3App(vm: AppViewModel) {
             var section by rememberSaveable { mutableStateOf(Section.Device) }
             // each section keeps its own place (subsection, scroll, search) while another is shown
             val holder: SaveableStateHolder = rememberSaveableStateHolder()
+            // a line from the history opened in the tag editor: the Functions section takes it from here
+            val editorRequest by vm.openInEditor.collectAsStateWithLifecycle()
+            LaunchedEffect(editorRequest) {
+                if (editorRequest != null) section = Section.Functions
+            }
 
             Scaffold(
                 bottomBar = {

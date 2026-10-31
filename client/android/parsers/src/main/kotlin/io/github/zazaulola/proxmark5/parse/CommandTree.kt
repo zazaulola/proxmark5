@@ -73,6 +73,21 @@ object CommandTree {
         }.take(limit).toList()
     }
 
+    /**
+     * The command a typed [line] runs: the longest run of its leading words that names a command
+     * of the tree, compared without case like the client does (cmdparser.c lowercases the name).
+     * Null when the words end on a category or leave the tree at once.
+     */
+    fun commandOf(root: CommandNode, line: String): CommandNode? {
+        var node = root
+        for (word in line.trim().split(Regex("\\s+"))) {
+            if (word.isEmpty()) break
+            node = node.children.firstOrNull { it.name.equals(word, ignoreCase = true) } ?: break
+            if (!node.isGroup) return node
+        }
+        return null
+    }
+
     /** "{ High frequency commands... }" -> "High frequency commands" */
     internal fun clean(help: String): String {
         var s = Ansi.strip(help).trim()

@@ -42,6 +42,13 @@ fun Pm3Theme(content: @Composable () -> Unit) {
 val TerminalBackground = Color(0xFF0B0F1A)
 val TerminalForeground = Color(0xFFE6E6E6)
 
+/** Colors of the items the output scanner highlights in the terminal (on the dark terminal). */
+val TerminalFile = Color(0xFF8CE0DF)
+val TerminalUid = Color(0xFFFFE08A)
+val TerminalKey = Color(0xFFEFB3FF)
+val TerminalHex = Color(0xFF8FB8FF)
+val TerminalCommand = Color(0xFF95F985)
+
 /** Status colors of the live session, shared by the terminal strip and the Status screen. */
 val ActivityIdleColor = Color(0xFF8A8A8A)
 val ActivityCommandColor = Color(0xFF6BE675)

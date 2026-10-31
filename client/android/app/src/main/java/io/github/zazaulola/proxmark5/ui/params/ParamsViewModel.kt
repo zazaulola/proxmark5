@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.zazaulola.proxmark5.core.HelpRepository
 import io.github.zazaulola.proxmark5.parse.CommandHelp
 import io.github.zazaulola.proxmark5.parse.params.CommandDraft
+import io.github.zazaulola.proxmark5.parse.params.CommandLine
 import io.github.zazaulola.proxmark5.parse.params.DraftCodec
 import io.github.zazaulola.proxmark5.parse.params.ParamSpec
 import io.github.zazaulola.proxmark5.parse.params.ParamSpecs
@@ -46,12 +47,28 @@ class ParamsViewModel(app: Application, private val saved: SavedStateHandle) : A
     fun load(command: String) {
         if (help[command] is HelpState.Ready) return
         help[command] = HelpState.Loading
+        viewModelScope.launch { fetch(command) }
+    }
+
+    private suspend fun fetch(command: String): HelpState {
+        val st = when (val r = HelpRepository.lookup(getApplication<Application>(), command)) {
+            is HelpRepository.Lookup.Found -> ready(command, r.help)
+            HelpRepository.Lookup.NoDump -> HelpState.Missing(noDump = true).also { textDraft(command) }
+            HelpRepository.Lookup.NotInDump -> HelpState.Missing(noDump = false).also { textDraft(command) }
+        }
+        help[command] = st
+        return st
+    }
+
+    /**
+     * Makes [line] (a line from the history) the draft of [command]: read into tags against the
+     * command's help once it is there; without the help every parameter becomes a raw tag.
+     */
+    fun loadLine(command: String, line: String) {
         viewModelScope.launch {
-            help[command] = when (val r = HelpRepository.lookup(getApplication<Application>(), command)) {
-                is HelpRepository.Lookup.Found -> ready(command, r.help)
-                HelpRepository.Lookup.NoDump -> HelpState.Missing(noDump = true).also { textDraft(command) }
-                HelpRepository.Lookup.NotInDump -> HelpState.Missing(noDump = false).also { textDraft(command) }
-            }
+            val st = help[command]?.takeIf { it !is HelpState.Loading } ?: fetch(command)
+            val specs = (st as? HelpState.Ready)?.specs.orEmpty()
+            update(CommandLine.parse(command, line, specs))
         }
     }
 

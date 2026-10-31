@@ -1,6 +1,6 @@
 package io.github.zazaulola.proxmark5.ui
 
-import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -49,24 +50,31 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.mimeTypes
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.zazaulola.proxmark5.core.Activity
+import io.github.zazaulola.proxmark5.history.InputText
 import io.github.zazaulola.proxmark5.parse.Activities
 import io.github.zazaulola.proxmark5.parse.ActivityKind
+import io.github.zazaulola.proxmark5.parse.output.Found
+import io.github.zazaulola.proxmark5.parse.output.FoundKind
+import io.github.zazaulola.proxmark5.parse.output.FoundRef
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -92,8 +100,10 @@ fun rememberNow(active: Boolean): State<Long> = produceState(System.currentTimeM
 /**
  * The live log of the one client session, with a line to type commands into. Collapsed
  * ([expanded] = false) it is a strip that shows what the session is doing and the last line
- * of output; opened, the whole log scrolls under it. Stays dark whatever the app theme.
- * [onInputFocus] reports whether the command line has focus, so the shell can keep room for it.
+ * of output; opened, the whole log scrolls under it, a strip of recent commands sits above the
+ * input line, and tapping a highlighted item in the output (a UID, a key, a file, a command the
+ * client suggests) offers to copy it or drop it into the command line. Stays dark whatever the
+ * app theme. [onInputFocus] reports whether the command line has focus, so the shell keeps room for it.
  */
 @Composable
 fun TerminalPanel(
@@ -106,6 +116,22 @@ fun TerminalPanel(
     val activity by vm.activity.collectAsStateWithLifecycle()
     val conn by vm.connection.collectAsStateWithLifecycle()
     val now by rememberNow(activity.running)
+    val history by vm.history.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    var pickedFound by remember { mutableStateOf<FoundRef?>(null) }
+    var historyOpen by remember { mutableStateOf(false) }
+
+    val historyActions = remember(vm) {
+        HistoryActions(
+            fill = { vm.fillInput(it) },
+            run = { vm.runCommand(it) },
+            tags = { if (!vm.editAsTags(it)) vm.fillInput(it) },
+            pin = { line, on -> vm.pinHistory(line, on) },
+            remove = { vm.removeHistory(it) },
+            copy = { copyText(context, "команда", it) },
+        )
+    }
 
     CompositionLocalProvider(LocalContentColor provides TerminalForeground) {
         Column(modifier.background(TerminalBackground)) {
@@ -113,10 +139,37 @@ fun TerminalPanel(
             val canStop = activity.running && conn != Connection.Flashing
             StatusBar(vm, activity, now, lines.lastOrNull { it.isNotBlank() }.orEmpty(), expanded, canStop)
             if (expanded) {
-                LogView(lines, Modifier.weight(1f).fillMaxWidth())
+                LogView(lines, Modifier.weight(1f).fillMaxWidth(), onFound = { pickedFound = it.ref() })
+                HistoryStrip(
+                    entries = history.quick(QUICK_HISTORY),
+                    actions = historyActions,
+                    onAll = { historyOpen = true },
+                )
                 CommandInput(vm, onInputFocus)
             }
         }
+    }
+
+    pickedFound?.let { f ->
+        FoundActionSheet(
+            found = f,
+            onInsert = { vm.insertIntoInput(f.value); pickedFound = null },
+            onCopy = {
+                copyText(context, foundKindName(f.kind), f.value, sensitive = f.kind == FoundKind.KEY)
+                pickedFound = null
+            },
+            onRun = if (f.kind == FoundKind.COMMAND) ({ vm.runCommand(f.value); pickedFound = null }) else null,
+            onDismiss = { pickedFound = null },
+        )
+    }
+
+    if (historyOpen) {
+        HistorySheet(
+            vm = vm,
+            actions = historyActions,
+            onFound = { copyText(context, foundKindName(it.kind), it.value, sensitive = it.kind == FoundKind.KEY) },
+            onDismiss = { historyOpen = false },
+        )
     }
 }
 
@@ -134,7 +187,6 @@ private fun statusText(a: Activity, now: Long): String {
 @Composable
 private fun StatusBar(vm: AppViewModel, activity: Activity, now: Long, lastLine: String, expanded: Boolean, canStop: Boolean) {
     val color = activityColor(activity.kind)
-    val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -175,8 +227,7 @@ private fun StatusBar(vm: AppViewModel, activity: Activity, now: Long, lastLine:
         if (expanded) {
             IconButton(
                 onClick = {
-                    clipboard.setText(AnnotatedString(vm.terminalText()))
-                    Toast.makeText(context, "Лог скопирован", Toast.LENGTH_SHORT).show()
+                    copyText(context, "лог", vm.terminalText())
                 },
                 modifier = Modifier.size(40.dp),
             ) { Icon(Icons.Filled.ContentCopy, contentDescription = "Копировать лог") }
@@ -185,7 +236,7 @@ private fun StatusBar(vm: AppViewModel, activity: Activity, now: Long, lastLine:
                     scope.launch {
                         val file = withContext(Dispatchers.IO) { vm.saveLog() }
                         val msg = if (file != null) "Сохранено в Library → Logs: ${file.name}" else "Не удалось сохранить лог"
-                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                     }
                 },
                 modifier = Modifier.size(40.dp),
@@ -198,7 +249,7 @@ private fun StatusBar(vm: AppViewModel, activity: Activity, now: Long, lastLine:
 }
 
 @Composable
-private fun LogView(lines: List<String>, modifier: Modifier = Modifier) {
+private fun LogView(lines: List<String>, modifier: Modifier = Modifier, onFound: (Found) -> Unit) {
     val state = rememberLazyListState()
     var follow by remember { mutableStateOf(true) }
 
@@ -213,7 +264,11 @@ private fun LogView(lines: List<String>, modifier: Modifier = Modifier) {
         if (follow && lines.isNotEmpty()) state.scrollToItem(lines.lastIndex)
     }
 
+    val context = LocalContext.current
     Box(modifier) {
+        // No SelectionContainer: over a streaming log it drops lines that scroll away and joins the
+        // copy without newlines, and its long-press fights the token drag. Instead each line copies
+        // whole on a long press away from a token, and the status bar copies the log.
         LazyColumn(state = state, modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
             itemsIndexed(lines) { _, line ->
                 AnsiText(
@@ -221,6 +276,8 @@ private fun LogView(lines: List<String>, modifier: Modifier = Modifier) {
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     modifier = Modifier.fillMaxWidth(),
+                    onFound = onFound,
+                    onCopyLine = { copyText(context, "строка", io.github.zazaulola.proxmark5.parse.Ansi.strip(it)) },
                 )
             }
         }
@@ -233,13 +290,42 @@ private fun LogView(lines: List<String>, modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CommandInput(vm: AppViewModel, onFocus: (Boolean) -> Unit) {
-    var input by rememberSaveable { mutableStateOf("") }
+    var input by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     DisposableEffect(Unit) { onDispose { onFocus(false) } }
+    val context = LocalContext.current
+
+    fun putIn(text: String) {
+        val r = InputText.insert(input.text, input.selection.start, input.selection.end, text)
+        input = TextFieldValue(r.text, TextRange(r.cursor))
+    }
+
+    // a line put here from the history (replace), or a value tapped/dropped from the output (insert)
+    val edit by vm.inputEdit.collectAsStateWithLifecycle()
+    LaunchedEffect(edit) {
+        val e = edit ?: return@LaunchedEffect
+        if (e.replace) input = TextFieldValue(e.text, TextRange(e.text.length)) else putIn(e.text)
+        vm.inputEditDone(e)
+    }
+
+    // a value dragged from the output (or another app) dropped onto the line: inserted at the cursor
+    val dropTarget = remember {
+        object : DragAndDropTarget {
+            override fun onDrop(event: DragAndDropEvent): Boolean {
+                val text = event.toAndroidDragEvent().clipData?.takeIf { it.itemCount > 0 }
+                    ?.getItemAt(0)?.coerceToText(context)?.toString()?.trim().orEmpty()
+                if (text.isEmpty()) return false
+                putIn(text)
+                return true
+            }
+        }
+    }
+
     fun send() {
-        vm.runCommand(input)
-        input = ""
+        vm.runCommand(input.text)
+        input = TextFieldValue("")
     }
 
     val dim = Color(0xFF8A8A8A)
@@ -250,7 +336,13 @@ private fun CommandInput(vm: AppViewModel, onFocus: (Boolean) -> Unit) {
         OutlinedTextField(
             value = input,
             onValueChange = { input = it },
-            modifier = Modifier.weight(1f).onFocusChanged { onFocus(it.isFocused) },
+            modifier = Modifier
+                .weight(1f)
+                .onFocusChanged { onFocus(it.isFocused) }
+                .dragAndDropTarget(
+                    shouldStartDragAndDrop = { e -> e.mimeTypes().any { it.startsWith("text/") } },
+                    target = dropTarget,
+                ),
             singleLine = true,
             placeholder = { Text("команда, напр. hw status") },
             textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
@@ -272,8 +364,11 @@ private fun CommandInput(vm: AppViewModel, onFocus: (Boolean) -> Unit) {
                 unfocusedPlaceholderColor = dim,
             ),
         )
-        IconButton(onClick = { send() }, enabled = input.isNotBlank()) {
+        IconButton(onClick = { send() }, enabled = input.text.isNotBlank()) {
             Icon(Icons.Filled.Send, contentDescription = "Отправить")
         }
     }
 }
+
+/** How many recent commands the strip over the input shows. */
+private const val QUICK_HISTORY = 12

@@ -12,6 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.zazaulola.proxmark5.core.Activity
 import io.github.zazaulola.proxmark5.core.ExecResult
+import io.github.zazaulola.proxmark5.core.HistoryStore
 import io.github.zazaulola.proxmark5.core.LibraryRepository
 import io.github.zazaulola.proxmark5.core.NativeClient
 import io.github.zazaulola.proxmark5.firmware.FirmwareChoice
@@ -21,6 +22,11 @@ import io.github.zazaulola.proxmark5.parse.Ansi
 import io.github.zazaulola.proxmark5.parse.Band
 import io.github.zazaulola.proxmark5.parse.CardSearch
 import io.github.zazaulola.proxmark5.parse.CommandNode
+import io.github.zazaulola.proxmark5.parse.CommandTree
+import io.github.zazaulola.proxmark5.parse.output.FoundRef
+import io.github.zazaulola.proxmark5.parse.output.OutputScan
+import io.github.zazaulola.proxmark5.history.CommandHistory
+import io.github.zazaulola.proxmark5.history.HistoryLine
 import io.github.zazaulola.proxmark5.parse.FlashLog
 import io.github.zazaulola.proxmark5.parse.HwVersion
 import io.github.zazaulola.proxmark5.parse.SearchResult
@@ -35,6 +41,7 @@ import io.github.zazaulola.proxmark5.usb.UsbTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -120,9 +127,18 @@ private fun connectionOf(snap: SessionSnapshot, found: Connection, reread: Strin
     }
 }
 
+/** A change for the terminal's command line: [text] in place of the line ([replace]) or at the cursor. */
+data class InputEdit(val text: String, val replace: Boolean, val id: Long)
+
+/** Open [line] in the tag editor of [command] (its words as in the tree, e.g. "hf mf rdbl"). */
+data class EditorRequest(val command: String, val line: String, val id: Long)
+
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     // The session lives in the service process and outlives this ViewModel: this only watches and steers it.
     private val session = Pm3Session.get(app)
+
+    // the history is the UI process's, kept on disk; it outlives the ViewModel like the session
+    private val historyStore = HistoryStore.get(app)
     private val usb = UsbTransport(app)
 
     // what the last look at the USB bus found (NoDevice, NeedPermission, Dfu); shown while the service has no session
@@ -354,15 +370,87 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _read.value = ReadState(running = false, hf = _read.value.hf, lf = CardSearch.parse(lf.grabbed, Band.LF))
     }
 
-    /** Sends a command line to the living session; its output streams to the terminal. */
-    fun runCommand(cmd: String) {
+    /**
+     * Sends a command line to the living session; its output streams to the terminal. With [record]
+     * the line goes to the history, and when its result comes, how it ended and what its output
+     * showed (UIDs, keys, files) go with it.
+     */
+    fun runCommand(cmd: String, record: Boolean = true) {
         val line = cmd.trim()
         if (line.isEmpty()) return
         if (line.length > IpcLimits.MAX_COMMAND_CHARS) {
             session.note("команда длиннее ${IpcLimits.MAX_COMMAND_CHARS} символов, не отправлена")
             return
         }
-        submit(line)
+        val result = submit(line)
+        if (!record) return
+        val key = HistoryLine.normalize(line)
+        historyStore.update { it.record(key, System.currentTimeMillis()) }
+        // the store's own scope, not the ViewModel's: the result belongs in the history even if the screen goes away
+        historyStore.track {
+            val res = result.await()
+            val found = foundAfter(key)
+            withContext(Dispatchers.Main) { historyStore.update { it.finish(key, res.code, found) } }
+        }
+    }
+
+    /** What the output of the last run of [line] showed, once the terminal has all of it. */
+    private suspend fun foundAfter(line: String): List<FoundRef> {
+        withTimeoutOrNull(2_000) { session.logCaughtUp() }
+        return withContext(Dispatchers.Default) {
+            OutputScan.foundForCommand(session.terminal.snapshot(), line).map { it.ref() }.distinct()
+        }
+    }
+
+    /** The command history, newest first. */
+    val history: StateFlow<CommandHistory> get() = historyStore.state
+
+    fun pinHistory(line: String, on: Boolean) = historyStore.update { it.pin(line, on) }
+
+    fun removeHistory(line: String) = historyStore.update { it.remove(line) }
+
+    fun clearHistory() = historyStore.update { it.clearUnpinned() }
+
+    private val _inputEdit = MutableStateFlow<InputEdit?>(null)
+
+    /** A change for the terminal's command line asked for from elsewhere (history, a found item, a hint); the line takes it once. */
+    val inputEdit: StateFlow<InputEdit?> = _inputEdit.asStateFlow()
+
+    /** Puts [text] in the command line in place of what is there, the cursor at its end. */
+    fun fillInput(text: String) {
+        _inputEdit.value = InputEdit(text, replace = true, id = ++editIds)
+    }
+
+    /** Inserts [text] at the cursor of the command line, with a space where words would run together. */
+    fun insertIntoInput(text: String) {
+        _inputEdit.value = InputEdit(text, replace = false, id = ++editIds)
+    }
+
+    /** The command line took [edit]. */
+    fun inputEditDone(edit: InputEdit) {
+        if (_inputEdit.value?.id == edit.id) _inputEdit.value = null
+    }
+
+    private var editIds = 0L
+
+    private val _openInEditor = MutableStateFlow<EditorRequest?>(null)
+
+    /** A line to open in the tag editor of its command (Functions); the Functions section takes it once. */
+    val openInEditor: StateFlow<EditorRequest?> = _openInEditor.asStateFlow()
+
+    /**
+     * Opens [line] in the tag editor of the command it runs. False when the client's command tree is not
+     * there yet or has no such command: the caller then leaves the line in the command line.
+     */
+    fun editAsTags(line: String): Boolean {
+        val root = commandTree.value ?: return false
+        val node = CommandTree.commandOf(root, line) ?: return false
+        _openInEditor.value = EditorRequest(node.line, HistoryLine.normalize(line), ++editIds)
+        return true
+    }
+
+    fun editorRequestDone(req: EditorRequest) {
+        if (_openInEditor.value?.id == req.id) _openInEditor.value = null
     }
 
     /**

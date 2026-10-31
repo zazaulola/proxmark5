@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.DragAndDropTransferData
@@ -84,22 +85,41 @@ fun AnsiText(
     }
 
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    // The drag/tap coroutine is started once and is NOT restarted when this line's content changes
+    // (a slot in the log's LazyColumn recomposes in place as the ring buffer scrolls past it). Read
+    // the per-line values through rememberUpdatedState so a gesture always acts on the line as it is
+    // shown now, never on a value captured when the slot first appeared.
+    val currentFound = rememberUpdatedState(found)
+    val currentStyled = rememberUpdatedState(styled)
+    val currentOnFound = rememberUpdatedState(onFound)
+    val currentOnCopyLine = rememberUpdatedState(onCopyLine)
     val gesture = if (onFound != null && (found.isNotEmpty() || onCopyLine != null)) {
         Modifier.dragAndDropSource {
             detectTapGestures(
                 onTap = { at ->
-                    val off = layout?.getOffsetForPosition(at) ?: return@detectTapGestures
-                    found.firstOrNull { off >= it.start && off < it.end }?.let { onFound(it) }
+                    val lay = layout ?: return@detectTapGestures
+                    val off = lay.getOffsetForPosition(at)
+                    val hit = currentFound.value.firstOrNull { off >= it.start && off < it.end }
+                        ?: return@detectTapGestures
+                    // getOffsetForPosition snaps to the nearest offset even past the glyph, so a tap
+                    // in the empty tail of a short line must be rejected or it would fire the last token.
+                    if (lay.getBoundingBox(off).inflate(TAP_SLOP).contains(at)) currentOnFound.value?.invoke(hit)
                 },
                 onLongPress = { at ->
-                    val off = layout?.getOffsetForPosition(at)
-                    val hit = off?.let { o -> found.firstOrNull { o >= it.start && o < it.end } }
+                    val lay = layout
+                    val off = lay?.getOffsetForPosition(at)
+                    val hit = if (lay != null && off != null) {
+                        currentFound.value.firstOrNull { off >= it.start && off < it.end }
+                            ?.takeIf { lay.getBoundingBox(off).inflate(TAP_SLOP).contains(at) }
+                    } else {
+                        null
+                    }
                     if (hit != null) {
                         val clip = ClipData.newPlainText(foundKindName(hit.kind), hit.value)
                         // DRAG_FLAG_GLOBAL lets the value drop into another app, not only our input
                         startTransfer(DragAndDropTransferData(clip, flags = View.DRAG_FLAG_GLOBAL))
                     } else {
-                        onCopyLine?.invoke(styled.text)
+                        currentOnCopyLine.value?.invoke(currentStyled.value.text)
                     }
                 },
             )
@@ -118,6 +138,9 @@ fun AnsiText(
         onTextLayout = { layout = it },
     )
 }
+
+// how far past a token's glyph box a tap still counts as hitting it, in pixels
+private const val TAP_SLOP = 8f
 
 private fun foundColor(kind: FoundKind) = when (kind) {
     FoundKind.FILE -> TerminalFile

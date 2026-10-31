@@ -389,7 +389,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // the store's own scope, not the ViewModel's: the result belongs in the history even if the screen goes away
         historyStore.track {
             val res = result.await()
-            val found = foundAfter(key)
+            // scan by the exact line that was submitted and echoed, not the normalized key:
+            // the echo in the log keeps the original spacing, so a normalized key would not match it
+            val found = foundAfter(line)
             withContext(Dispatchers.Main) { historyStore.update { it.finish(key, res.code, found) } }
         }
     }

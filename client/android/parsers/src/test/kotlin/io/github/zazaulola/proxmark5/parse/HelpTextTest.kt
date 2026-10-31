@@ -129,7 +129,8 @@ class HelpTextTest {
         """.trimMargin()
         val h = HelpText.parse("\u001b[32m$text\u001b[0m")
         assertNull(h.offline)
-        assertEquals(listOf("--card", "--interactive"), h.options.map { it.name })
+        // -r is in the usage line only (this excerpt drops its options row): it is taken from there
+        assertEquals(listOf("--card", "--interactive", "-r"), h.options.map { it.name })
         // a wrapped description is joined onto its option
         assertEquals("Console will not be returned until sniff finishes or is aborted", h.options[1].description)
         assertEquals("hf 14a sniff -c -r", h.examples.single().text)
